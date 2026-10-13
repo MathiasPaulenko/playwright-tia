@@ -1,4 +1,6 @@
 node_modules/
+# test fixture dep that esbuild must resolve through node_modules
+!tests/fixtures/app/node_modules/
 dist/
 *.tsbuildinfo
 /test-results/
