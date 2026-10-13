@@ -85,4 +85,26 @@ describe('selectAffected', () => {
     expect(result.shared ?? []).toEqual([]);
     expect(result.specs.every((s) => s.reason !== 'shared-file')).toBe(true);
   });
+
+  it('reports changed-source when a spec is triggered by shared AND normal files', () => {
+    let m = emptyManifest();
+    m = mergeSpec(m, 'a.spec.ts', ['src/shared.ts', 'src/a.ts'], 1);
+    m = mergeSpec(m, 'b.spec.ts', ['src/shared.ts'], 1);
+    m = mergeSpec(m, 'c.spec.ts', ['src/shared.ts'], 1);
+    const result = selectAffected(m, ['src/shared.ts', 'src/a.ts'], [], { ...config, sharedThreshold: 0.8 });
+    const specA = result.specs.find((s) => s.spec === 'a.spec.ts');
+    expect(specA?.reason).toBe('changed-source');
+    expect(result.specs.find((s) => s.spec === 'b.spec.ts')?.reason).toBe('shared-file');
+  });
+
+  it('treats a file exactly at the threshold as shared', () => {
+    let m = emptyManifest();
+    m = mergeSpec(m, 'a.spec.ts', ['src/x.ts'], 1);
+    m = mergeSpec(m, 'b.spec.ts', ['src/x.ts'], 1);
+    m = mergeSpec(m, 'c.spec.ts', ['src/x.ts'], 1);
+    m = mergeSpec(m, 'd.spec.ts', ['src/x.ts'], 1);
+    m = mergeSpec(m, 'e.spec.ts', ['src/other.ts'], 1); // x: 4/5 = 0.8
+    const result = selectAffected(m, ['src/x.ts'], [], { ...config, sharedThreshold: 0.8 });
+    expect(result.shared).toEqual([{ file: 'src/x.ts', specCount: 4 }]);
+  });
 });

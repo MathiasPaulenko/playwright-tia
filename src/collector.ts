@@ -11,12 +11,19 @@ async function tiaConfig(rootDir: string): Promise<TiaConfig> {
   return (cachedConfig ??= await loadConfig(rootDir));
 }
 
-// Collection: PW_TIA_COLLECT wins, then CI, then config.coverage.enabled.
-async function shouldCollect(rootDir: string): Promise<boolean> {
-  const flag = process.env.PW_TIA_COLLECT;
+/** Collection: PW_TIA_COLLECT wins, then CI, then config.coverage.enabled. */
+export function collectEnabled(
+  env: { PW_TIA_COLLECT?: string; CI?: string },
+  configEnabled: boolean,
+): boolean {
+  const flag = env.PW_TIA_COLLECT;
   if (flag === '0' || flag === 'false') return false;
-  if (flag === '1' || flag === 'true' || !!process.env.CI) return true;
-  return (await tiaConfig(rootDir)).coverage.enabled;
+  if (flag === '1' || flag === 'true' || env.CI) return true;
+  return configEnabled;
+}
+
+async function shouldCollect(rootDir: string): Promise<boolean> {
+  return collectEnabled(process.env, (await tiaConfig(rootDir)).coverage.enabled);
 }
 
 async function record(session: CDPSession, testInfo: TestInfo, rootDir: string): Promise<void> {

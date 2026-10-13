@@ -56,6 +56,15 @@ describe('saveManifest + loadManifest', () => {
     await saveManifest(path, manifest);
     expect(await loadManifest(path)).toEqual(manifest);
   });
+
+  it('writes spec keys sorted for stable diffs', async () => {
+    const path = join(dir, 'tia-manifest.json');
+    let manifest = mergeSpec(emptyManifest(), 'z.spec.ts', [], 1);
+    manifest = mergeSpec(manifest, 'a.spec.ts', [], 1);
+    await saveManifest(path, manifest);
+    const written = JSON.parse(await readFile(path, 'utf8')) as { specs: Record<string, unknown> };
+    expect(Object.keys(written.specs)).toEqual(['a.spec.ts', 'z.spec.ts']);
+  });
 });
 
 describe('mergeSpec', () => {
@@ -114,6 +123,20 @@ describe('appendSpecFragment + readFragments', () => {
 
   it('returns an empty map when the directory does not exist', async () => {
     expect(await readFragments(join(dir, 'nope'))).toEqual(new Map());
+  });
+
+  it('skips torn lines instead of failing the whole read', async () => {
+    const fragDir = join(dir, 'fragments');
+    await appendSpecFragment(fragDir, 0, 'a.spec.ts', ['src/a.ts'], 1);
+    await writeFile(
+      join(fragDir, '1.jsonl'),
+      `${JSON.stringify({ spec: 'b.spec.ts', sources: ['src/b.ts'], updatedAt: 2 })}\n{corrupt-line\n`,
+      'utf8',
+    );
+    const records = await readFragments(fragDir);
+    expect(records.get('a.spec.ts')).toBeDefined();
+    expect(records.get('b.spec.ts')).toBeDefined();
+    expect(records.size).toBe(2);
   });
 });
 

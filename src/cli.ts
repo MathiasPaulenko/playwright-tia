@@ -150,12 +150,16 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
   const asJson = rest.includes('--json');
   const all = rest.includes('--all');
 
+  const manifest = await loadManifest(join(cwd, config.manifestPath));
+  const currentSpecs = await walkSpecs(cwd, config.specGlob);
+  // Run-all must list manifest specs too — a specGlob that misses files
+  // shouldn't make them invisible when we fall back to everything.
+  const allSpecs = [...new Set([...currentSpecs, ...Object.keys(manifest.specs)])].sort();
   const runAllSpecs = (reason: string): AffectedResult => ({
-    specs: currentSpecs.map((spec) => ({ spec, triggeredBy: [], reason: 'run-all' })),
+    specs: allSpecs.map((spec) => ({ spec, triggeredBy: [], reason: 'run-all' })),
     runAll: true,
     reason,
   });
-  const currentSpecs = await walkSpecs(cwd, config.specGlob);
   if (all) {
     return emit(runAllSpecs('--all'), asJson, 0);
   }
@@ -166,7 +170,6 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
   } catch (error) {
     return emit(runAllSpecs(`git error: ${error instanceof Error ? error.message : String(error)}`), asJson, 0);
   }
-  const manifest = await loadManifest(join(cwd, config.manifestPath));
   return emit(selectAffected(manifest, changed, currentSpecs, config), asJson, changed.length);
 
   function emit(result: AffectedResult, asJson: boolean, changedCount: number): RunResult {

@@ -97,4 +97,50 @@ describe('resolveSources', () => {
     const { sources } = await resolveSources([evalEntry], { rootDir: appDir });
     expect(sources).toEqual([]);
   });
+
+  it('resolves an external .map file via fetchText', async () => {
+    const result = await build({
+      entryPoints: [join(appDir, 'src/main.ts')],
+      bundle: true,
+      format: 'iife',
+      platform: 'browser',
+      write: false,
+      sourcemap: 'external',
+      outdir: 'dist',
+      logLevel: 'silent',
+    });
+    const js = result.outputFiles.find((f) => f.path.endsWith('.js'))!;
+    const map = result.outputFiles.find((f) => f.path.endsWith('.map'))!;
+    // real builds append the map reference; esbuild's write:false output doesn't
+    const source = `${js.text}\n//# sourceMappingURL=main.js.map\n`;
+    const { sources, unresolved } = await resolveSources(
+      [{ url: 'http://localhost:5173/dist/main.js', source, functions: covered(source) }],
+      {
+        rootDir: appDir,
+        serveRoot: join(appDir, 'dist'),
+        fetchText: async (url) => (url.endsWith('.map') ? map.text : undefined),
+      },
+    );
+    expect(unresolved).toEqual([]);
+    expect(sources).toContain('src/alpha.ts');
+    expect(sources).toContain('src/main.ts');
+  });
+
+  it('marks a script unresolved when its external map cannot be fetched', async () => {
+    const source = 'var x = 1;\n//# sourceMappingURL=missing.map';
+    const { sources, unresolved } = await resolveSources(
+      [{ url: 'http://localhost:5173/app.js', source, functions: covered(source) }],
+      { rootDir: appDir, fetchText: async () => undefined },
+    );
+    expect(sources).toEqual([]);
+    expect(unresolved).toEqual(['http://localhost:5173/app.js']);
+  });
+
+  it('unions sources across multiple coverage entries', async () => {
+    const betaOnly = entry(bundle, 'beta() {');
+    const alphaOnly = entry(bundle, 'alpha() {');
+    const { sources } = await resolveSources([betaOnly, alphaOnly], { rootDir: appDir });
+    expect(sources).toContain('src/alpha.ts');
+    expect(sources).toContain('src/beta.ts');
+  });
 });
