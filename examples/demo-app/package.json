@@ -1,0 +1,16 @@
+{
+  "name": "demo-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "esbuild": "^0.27.0",
+    "playwright-tia": "file:../.."
+  }
+}

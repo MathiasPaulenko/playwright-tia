@@ -74,6 +74,27 @@ describe('pw-tia affected', () => {
       { spec: 'tests/cart.spec.ts', triggeredBy: ['src/cart.ts'], reason: 'changed-source' },
     ]);
   });
+
+  it('resolves paths relative to a project in a monorepo subdir', async () => {
+    const sub = join(dir, 'packages', 'app');
+    await mkdir(sub, { recursive: true });
+    const subManifest: TiaManifest = {
+      version: 1,
+      specs: { 'tests/cart.spec.ts': { sources: ['src/cart.ts'], updatedAt: 1 } },
+    };
+    await writeFile(join(sub, 'tia-manifest.json'), JSON.stringify(subManifest));
+    await mkdir(join(sub, 'src'), { recursive: true });
+    await writeFile(join(sub, 'src', 'cart.ts'), 'x');
+    await writeFile(join(dir, 'other.ts'), 'x');
+    await gitRun('add', '-A');
+    await gitRun('commit', '-qm', 'base');
+    await writeFile(join(sub, 'src', 'cart.ts'), 'y');
+    await gitRun('commit', '-qam', 'touch cart');
+
+    const { stdout, code } = await run(['affected', '--base', 'HEAD~1'], sub);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('tests/cart.spec.ts');
+  });
 });
 
 describe('pw-tia collect', () => {

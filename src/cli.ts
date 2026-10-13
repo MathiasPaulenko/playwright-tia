@@ -44,8 +44,18 @@ export async function loadConfig(rootDir: string): Promise<TiaConfig> {
   }
 }
 
+/**
+ * git reports paths relative to the repo root; the manifest is relative to
+ * rootDir. In monorepos (rootDir = packages/foo) we strip the prefix and keep
+ * only files under the project — outside changes can't be covered anyway.
+ */
 async function gitChangedFiles(rootDir: string, base: string): Promise<string[]> {
-  const diff = async (args: string[]) => (await execFileAsync('git', args, { cwd: rootDir })).stdout;
+  const { stdout: topLevel } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: rootDir,
+  });
+  const gitRoot = topLevel.trim();
+  const prefix = normalizeSpecPath(relative(gitRoot, rootDir));
+  const diff = async (args: string[]) => (await execFileAsync('git', args, { cwd: gitRoot })).stdout;
   const files = new Set<string>();
   const outputs = [
     await diff(['diff', '--name-only', `${base}...HEAD`]),
@@ -54,8 +64,10 @@ async function gitChangedFiles(rootDir: string, base: string): Promise<string[]>
   ];
   for (const out of outputs) {
     for (const line of out.split('\n')) {
-      const file = line.trim();
-      if (file) files.add(normalizeSpecPath(file));
+      const file = normalizeSpecPath(line.trim());
+      if (!file) continue;
+      if (prefix && file !== prefix && !file.startsWith(`${prefix}/`)) continue;
+      files.add(prefix ? file.slice(prefix.length + 1) : file);
     }
   }
   return [...files].sort();

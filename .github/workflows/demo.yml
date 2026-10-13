@@ -1,0 +1,53 @@
+name: demo
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  demo-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # --install-links copies file: deps instead of symlinking, so the
+      # peer @playwright/test resolves to the app's own copy (as on npm)
+      - run: npm install --install-links
+        working-directory: examples/demo-app
+      - run: npx playwright install --with-deps chromium
+
+      # Baseline: a full run with coverage enabled learns the manifest.
+      - run: PW_TIA_COLLECT=1 npx playwright test
+        working-directory: examples/demo-app
+      - run: npx pw-tia collect && cat tia-manifest.json
+        working-directory: examples/demo-app
+
+      # Simulated PR: touching cart.ts must select only the specs that
+      # executed cart.ts — cart, checkout and orders — never profile.
+      - name: touch src/cart.ts
+        working-directory: examples/demo-app
+        run: |
+          git config user.email ci@example.com
+          git config user.name ci
+          echo "// touched" >> src/cart.ts
+          git commit -qam "demo: touch cart"
+      - name: assert selection
+        working-directory: examples/demo-app
+        run: |
+          SPECS=$(npx pw-tia affected --base HEAD~1)
+          echo "$SPECS"
+          echo "$SPECS" | grep -q '^tests/cart.spec.ts$'
+          echo "$SPECS" | grep -q '^tests/checkout.spec.ts$'
+          echo "$SPECS" | grep -q '^tests/orders.spec.ts$'
+          ! echo "$SPECS" | grep -q 'profile.spec.ts'
+      - name: run only affected specs
+        working-directory: examples/demo-app
+        run: npx playwright test $(npx pw-tia affected --base HEAD~1)

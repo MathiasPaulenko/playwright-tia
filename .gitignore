@@ -11,6 +11,10 @@ dist/
 coverage/
 .env*
 .tia/
+test-results/
+blob-report/
+playwright-report/
+/examples/**/dist/
 
 # Notas internas de diseño e investigación — no publicar
 ref/

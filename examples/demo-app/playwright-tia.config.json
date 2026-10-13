@@ -1,0 +1,10 @@
+{
+  "manifestPath": "tia-manifest.json",
+  "baseRef": "origin/main",
+  "specGlob": ["tests/**/*.spec.ts"],
+  "forceRun": ["playwright.config.*", "serve.mjs"],
+  "coverage": {
+    "filter": ["!**/node_modules/**"]
+  },
+  "sharedThreshold": 0.8
+}
