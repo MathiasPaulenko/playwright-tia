@@ -1,0 +1,40 @@
+name: Bug report
+description: Something in playwright-tia is not working as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal steps, config, and commands. A small repo helps a lot.
+      placeholder: |
+        1. npx playwright test ...
+        2. npx pw-tia affected --base origin/main
+        3. ...
+  - type: textarea
+    id: output
+    attributes:
+      label: CLI output / logs
+      description: Paste stderr of `pw-tia affected` and any `pw-tia:` warnings.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "playwright-tia 0.1.0, @playwright/test 1.55, node 22, OS"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: My test build emits sourcemaps and the manifest exists and is committed
+        - label: Selection behaved conservatively rather than correctly (I read the README's rules table)
