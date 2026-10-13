@@ -1,0 +1,48 @@
+name: publish
+on:
+  release:
+    types: [published]
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Tag-push path: create the GitHub release here. Trusted publishing
+      # validates the top-level workflow name, so this stays in publish.yml
+      # (a workflow_call indirection would present the caller instead).
+      - name: Create release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+      # Trusted publishing requires npm CLI >= 11.5.1; Node 22 ships npm 10.x.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      # Idempotent: skip when the version is already on npm (e.g. the
+      # manual first publish, or re-running a failed release job).
+      - name: Check published version
+        id: published
+        env:
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          V="${TAG#v}"
+          if npm view "playwright-tia@$V" version > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - run: npm publish --provenance --access public
+        if: steps.published.outputs.exists == 'false'
