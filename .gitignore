@@ -10,6 +10,7 @@ dist/
 /examples/**/tia-manifest.json
 coverage/
 .env*
+.tia/
 
 # Notas internas de diseño e investigación — no publicar
 ref/

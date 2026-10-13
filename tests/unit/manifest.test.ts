@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { emptyManifest, loadManifest, mergeSpec, pruneManifest, saveManifest } from '../../src/manifest.js';
+import { appendSpecFragment, mergeFragments, readFragments } from '../../src/manifest.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -69,5 +70,44 @@ describe('pruneManifest', () => {
 describe('emptyManifest', () => {
   it('returns version 1 with no specs', () => {
     expect(emptyManifest()).toEqual({ version: 1, specs: {} });
+  });
+});
+
+describe('appendSpecFragment + readFragments', () => {
+  it('appends jsonl entries per spec and reads them back', async () => {
+    const fragDir = join(dir, 'fragments');
+    await appendSpecFragment(fragDir, 0, 'tests/a.spec.ts', ['src/a.ts'], 10);
+    await appendSpecFragment(fragDir, 0, 'tests/b.spec.ts', ['src/b.ts'], 11);
+    await appendSpecFragment(fragDir, 1, 'tests/c.spec.ts', ['src/c.ts'], 12);
+
+    const records = await readFragments(fragDir);
+    expect(records.get('tests/a.spec.ts')).toEqual({ sources: ['src/a.ts'], updatedAt: 10 });
+    expect(records.get('tests/b.spec.ts')).toEqual({ sources: ['src/b.ts'], updatedAt: 11 });
+    expect(records.get('tests/c.spec.ts')).toEqual({ sources: ['src/c.ts'], updatedAt: 12 });
+  });
+
+  it('last write wins when a spec re-runs', async () => {
+    const fragDir = join(dir, 'fragments');
+    await appendSpecFragment(fragDir, 0, 'a.spec.ts', ['src/old.ts'], 1);
+    await appendSpecFragment(fragDir, 0, 'a.spec.ts', ['src/new.ts'], 2);
+    await expect(readFragments(fragDir)).resolves.toEqual(
+      new Map([['a.spec.ts', { sources: ['src/new.ts'], updatedAt: 2 }]]),
+    );
+  });
+
+  it('returns an empty map when the directory does not exist', async () => {
+    expect(await readFragments(join(dir, 'nope'))).toEqual(new Map());
+  });
+});
+
+describe('mergeFragments', () => {
+  it('merges fragments into a manifest and prunes deleted specs', async () => {
+    const fragDir = join(dir, 'fragments');
+    await appendSpecFragment(fragDir, 0, 'a.spec.ts', ['src/a.ts'], 1);
+
+    const stale = mergeSpec(emptyManifest(), 'deleted.spec.ts', ['src/x.ts'], 1);
+    const merged = await mergeFragments(fragDir, stale, ['a.spec.ts']);
+    expect(Object.keys(merged.specs)).toEqual(['a.spec.ts']);
+    expect(merged.specs['a.spec.ts']!.sources).toEqual(['src/a.ts']);
   });
 });
