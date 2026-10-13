@@ -45,7 +45,6 @@ export async function loadManifest(path: string): Promise<TiaManifest> {
 /** Writes the manifest with sorted spec keys so committed diffs stay minimal. */
 export async function saveManifest(path: string, manifest: TiaManifest): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  // Sorted keys keep the committed manifest diff-minimal across runs.
   const sorted: TiaManifest = {
     version: 1,
     specs: Object.fromEntries(Object.entries(manifest.specs).sort(([a], [b]) => a.localeCompare(b))),
@@ -53,8 +52,8 @@ export async function saveManifest(path: string, manifest: TiaManifest): Promise
   await writeFile(path, `${JSON.stringify(sorted, null, 2)}\n`, 'utf8');
 }
 
-/** Spec keys stay POSIX-style regardless of the platform Playwright ran on. */
-export function normalizeSpecPath(path: string): string {
+/** Repo paths stay POSIX-style regardless of the platform Playwright ran on. */
+export function normalizeRepoPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
@@ -65,7 +64,7 @@ export function mergeSpec(
   sources: string[],
   now: number = Math.floor(Date.now() / 1000),
 ): TiaManifest {
-  manifest.specs[normalizeSpecPath(specPath)] = {
+  manifest.specs[normalizeRepoPath(specPath)] = {
     sources: [...new Set(sources)].sort(),
     updatedAt: now,
   };
@@ -74,7 +73,7 @@ export function mergeSpec(
 
 /** Drops records for specs no longer in `currentSpecs` (deleted or renamed). */
 export function pruneManifest(manifest: TiaManifest, currentSpecs: string[]): void {
-  const keep = new Set(currentSpecs.map(normalizeSpecPath));
+  const keep = new Set(currentSpecs.map(normalizeRepoPath));
   for (const key of Object.keys(manifest.specs)) {
     if (!keep.has(key)) delete manifest.specs[key];
   }
@@ -93,7 +92,7 @@ export async function appendSpecFragment(
   now: number = Math.floor(Date.now() / 1000),
 ): Promise<void> {
   await mkdir(fragmentsDir, { recursive: true });
-  const line = `${JSON.stringify({ spec: normalizeSpecPath(specPath), sources: [...new Set(sources)].sort(), updatedAt: now })}\n`;
+  const line = `${JSON.stringify({ spec: normalizeRepoPath(specPath), sources: [...new Set(sources)].sort(), updatedAt: now })}\n`;
   await appendFile(join(fragmentsDir, `${workerId}.jsonl`), line, 'utf8');
 }
 
@@ -113,7 +112,7 @@ export async function readFragments(fragmentsDir: string): Promise<Map<string, S
       try {
         const { spec, sources, updatedAt } = JSON.parse(line) as SpecRecord & { spec: string };
         if (typeof spec === 'string' && Array.isArray(sources)) {
-          records.set(normalizeSpecPath(spec), { sources, updatedAt });
+          records.set(normalizeRepoPath(spec), { sources, updatedAt });
         }
       } catch {
         // A torn write (killed worker) must not break the whole merge.

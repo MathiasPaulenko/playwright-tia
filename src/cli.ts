@@ -8,7 +8,7 @@ import picomatch from 'picomatch';
 
 import { existsSync } from 'node:fs';
 import { loadConfig } from './config.js';
-import { loadManifest, mergeFragments, normalizeSpecPath, saveManifest } from './manifest.js';
+import { loadManifest, mergeFragments, normalizeRepoPath, saveManifest } from './manifest.js';
 import { selectAffected, type AffectedResult } from './selector.js';
 
 const execFileAsync = promisify(execFile);
@@ -47,17 +47,17 @@ async function gitChangedFiles(rootDir: string, base: string): Promise<string[]>
     cwd: rootDir,
   });
   const gitRoot = topLevel.trim();
-  const prefix = normalizeSpecPath(relative(gitRoot, rootDir));
+  const prefix = normalizeRepoPath(relative(gitRoot, rootDir));
   const diff = async (args: string[]) => (await execFileAsync('git', args, { cwd: gitRoot })).stdout;
   const files = new Set<string>();
-  const outputs = [
-    await diff(['diff', '--name-only', `${base}...HEAD`]),
-    await diff(['diff', '--name-only']), // unstaged
-    await diff(['diff', '--cached', '--name-only']), // staged
-  ];
+  const outputs = await Promise.all([
+    diff(['diff', '--name-only', `${base}...HEAD`]),
+    diff(['diff', '--name-only']), // unstaged
+    diff(['diff', '--cached', '--name-only']), // staged
+  ]);
   for (const out of outputs) {
     for (const line of out.split('\n')) {
-      const file = normalizeSpecPath(line.trim());
+      const file = normalizeRepoPath(line.trim());
       if (!file) continue;
       if (prefix && file !== prefix && !file.startsWith(`${prefix}/`)) continue;
       files.add(prefix ? file.slice(prefix.length + 1) : file);
@@ -76,7 +76,7 @@ async function walkSpecs(rootDir: string, globs: string[]): Promise<string[]> {
       if (entry.isDirectory()) {
         await walk(full);
       } else {
-        const rel = normalizeSpecPath(relative(rootDir, full));
+        const rel = normalizeRepoPath(relative(rootDir, full));
         if (matchers.some((m) => m(rel))) found.push(rel);
       }
     }
@@ -171,20 +171,20 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
     return emit(runAllSpecs(`git error: ${error instanceof Error ? error.message : String(error)}`), asJson, 0);
   }
   return emit(selectAffected(manifest, changed, currentSpecs, config), asJson, changed.length);
-
-  function emit(result: AffectedResult, asJson: boolean, changedCount: number): RunResult {
-    if (asJson) {
-      return { code: 0, stdout: `${JSON.stringify(result, null, 2)}\n`, stderr: explain(result, changedCount) };
-    }
-    return {
-      code: 0,
-      stdout: result.specs.length ? `${result.specs.map((s) => s.spec).join('\n')}\n` : '',
-      stderr: explain(result, changedCount),
-    };
-  }
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+function emit(result: AffectedResult, asJson: boolean, changedCount: number): RunResult {
+  if (asJson) {
+    return { code: 0, stdout: `${JSON.stringify(result, null, 2)}\n`, stderr: explain(result, changedCount) };
+  }
+  return {
+    code: 0,
+    stdout: result.specs.length ? `${result.specs.map((s) => s.spec).join('\n')}\n` : '',
+    stderr: explain(result, changedCount),
+  };
+}
+
+const isMain = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
   void run(process.argv.slice(2)).then(({ code, stdout, stderr }) => {
     if (stdout) process.stdout.write(stdout);

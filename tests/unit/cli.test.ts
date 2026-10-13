@@ -32,7 +32,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  // Windows may hold fs handles briefly after git exits — retry removal.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const manifest: TiaManifest = {

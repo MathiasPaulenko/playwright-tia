@@ -1,7 +1,7 @@
 import picomatch from 'picomatch';
 
 import type { TiaConfig } from './config.js';
-import { normalizeSpecPath, type TiaManifest } from './manifest.js';
+import { normalizeRepoPath, type TiaManifest } from './manifest.js';
 
 export type AffectedReason = 'changed-source' | 'spec-changed' | 'new-spec' | 'no-sources' | 'shared-file' | 'run-all';
 
@@ -36,7 +36,7 @@ export function selectAffected(
   config: TiaConfig,
 ): AffectedResult {
   const manifestSpecs = Object.keys(manifest.specs);
-  const allSpecs = new Set([...manifestSpecs, ...currentSpecs.map(normalizeSpecPath)]);
+  const allSpecs = new Set([...manifestSpecs, ...currentSpecs.map(normalizeRepoPath)]);
   const toSpecList = (reason: AffectedReason): AffectedSpec[] =>
     [...allSpecs].sort().map((spec) => ({ spec, triggeredBy: [], reason }));
 
@@ -45,7 +45,7 @@ export function selectAffected(
   }
 
   const forceMatchers = config.forceRun.map((g) => picomatch(g));
-  const forced = changedFiles.find((f) => forceMatchers.some((match) => match(normalizeSpecPath(f))));
+  const forced = changedFiles.find((f) => forceMatchers.some((match) => match(normalizeRepoPath(f))));
   if (forced) {
     return { specs: toSpecList('run-all'), runAll: true, reason: `forceRun: ${forced}` };
   }
@@ -65,7 +65,7 @@ export function selectAffected(
       .map(([file]) => file),
   );
 
-  const changed = new Set(changedFiles.map(normalizeSpecPath));
+  const changed = new Set(changedFiles.map(normalizeRepoPath));
   const specMatchers = config.specGlob.map((g) => picomatch(g));
   const isSpecPath = (p: string) => specMatchers.some((m) => m(p));
 

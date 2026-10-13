@@ -2,10 +2,9 @@ import { join, relative } from 'node:path';
 import { test as base, type CDPSession, type TestInfo } from '@playwright/test';
 
 import { loadConfig, type TiaConfig } from './config.js';
-import { appendSpecFragment, normalizeSpecPath } from './manifest.js';
+import { appendSpecFragment, normalizeRepoPath } from './manifest.js';
 import { resolveSources, type CoverageEntry } from './resolve.js';
 
-// Config is constant per worker — load once.
 let cachedConfig: TiaConfig | undefined;
 async function tiaConfig(rootDir: string): Promise<TiaConfig> {
   return (cachedConfig ??= await loadConfig(rootDir));
@@ -51,7 +50,7 @@ async function record(session: CDPSession, testInfo: TestInfo, rootDir: string):
         `(${unresolved.slice(0, 3).join(', ')}${unresolved.length > 3 ? ', …' : ''}) — this spec keeps conservative sources`,
     );
   }
-  const specPath = normalizeSpecPath(relative(rootDir, testInfo.file));
+  const specPath = normalizeRepoPath(relative(rootDir, testInfo.file));
   await appendSpecFragment(join(rootDir, '.tia', 'fragments'), testInfo.parallelIndex, specPath, sources);
 }
 

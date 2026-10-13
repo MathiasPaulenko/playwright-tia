@@ -7,7 +7,7 @@ export {
   loadManifest,
   mergeFragments,
   mergeSpec,
-  normalizeSpecPath,
+  normalizeRepoPath,
   pruneManifest,
   readFragments,
   saveManifest,

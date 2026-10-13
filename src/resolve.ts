@@ -69,7 +69,6 @@ function lineStarts(source: string): number[] {
   return starts;
 }
 
-/** Merge every executed V8 range into sorted, non-overlapping byte intervals. */
 function coveredIntervals(functions: Profiler.FunctionCoverage[]): [number, number][] {
   const intervals: [number, number][] = [];
   for (const fn of functions) {
@@ -183,7 +182,9 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
       const intervals = coveredIntervals(entry.functions);
       eachMapping(map, (mapping) => {
         if (!mapping.source) return;
-        const offset = starts[mapping.generatedLine - 1]! + mapping.generatedColumn;
+        const lineStart = starts[mapping.generatedLine - 1];
+        if (lineStart === undefined) return;
+        const offset = lineStart + mapping.generatedColumn;
         if (!inIntervals(intervals, offset)) return;
         const cacheKey = `${virtualDir}${mapping.source}`;
         let rel = normalized.get(cacheKey);
