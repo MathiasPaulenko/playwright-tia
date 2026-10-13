@@ -13,6 +13,7 @@ export interface TiaManifest {
   specs: Record<string, SpecRecord>;
 }
 
+/** A v1 manifest with no records — also the safe fallback for any load failure. */
 export function emptyManifest(): TiaManifest {
   return { version: 1, specs: {} };
 }
@@ -41,6 +42,7 @@ export async function loadManifest(path: string): Promise<TiaManifest> {
   }
 }
 
+/** Writes the manifest with sorted spec keys so committed diffs stay minimal. */
 export async function saveManifest(path: string, manifest: TiaManifest): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   // Sorted keys keep the committed manifest diff-minimal across runs.
@@ -70,6 +72,7 @@ export function mergeSpec(
   return manifest;
 }
 
+/** Drops records for specs no longer in `currentSpecs` (deleted or renamed). */
 export function pruneManifest(manifest: TiaManifest, currentSpecs: string[]): void {
   const keep = new Set(currentSpecs.map(normalizeSpecPath));
   for (const key of Object.keys(manifest.specs)) {
@@ -94,6 +97,7 @@ export async function appendSpecFragment(
   await appendFile(join(fragmentsDir, `${workerId}.jsonl`), line, 'utf8');
 }
 
+/** Reads all `*.jsonl` fragments; per spec the last line wins. Missing dir → empty map. */
 export async function readFragments(fragmentsDir: string): Promise<Map<string, SpecRecord>> {
   const records = new Map<string, SpecRecord>();
   let files: string[];
@@ -119,6 +123,7 @@ export async function readFragments(fragmentsDir: string): Promise<Map<string, S
   return records;
 }
 
+/** Merges fragment records into `manifest`, then prunes to `currentSpecs` when given. */
 export async function mergeFragments(
   fragmentsDir: string,
   manifest: TiaManifest,

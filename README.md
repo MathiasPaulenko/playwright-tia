@@ -45,7 +45,13 @@ test('checks out', async ({ page }) => { /* same API */ });
 
 The `tia` fixture is automatic — when coverage collection is enabled it wraps every spec with CDP coverage and records the sources it executed. When disabled it does nothing. Collection never fails a test: errors degrade to a warning, failed/skipped specs are not recorded (their coverage would be partial), and scripts without a usable sourcemap produce a `pw-tia:` warning and leave the spec conservative.
 
-**2. Run with collection enabled:**
+**2. Gitignore the working dir** — coverage fragments are intermediate artifacts:
+
+```gitignore
+.tia/
+```
+
+**3. Run with collection enabled:**
 
 ```bash
 PW_TIA_COLLECT=1 npx playwright test   # or just run it in CI — CI=true enables it
@@ -54,7 +60,7 @@ npx pw-tia collect                     # merge fragments → tia-manifest.json
 
 Coverage overhead is ~5–15%, so it's opt-in locally (`PW_TIA_COLLECT=1`) and on by default in CI. Commit `tia-manifest.json` to your repo.
 
-**3. Select on each PR:**
+**4. Select on each PR:**
 
 ```bash
 npx playwright test $(npx pw-tia affected --base origin/main)
@@ -110,7 +116,13 @@ Optional `playwright-tia.config.json` in your project root:
 | `sharedThreshold` | `0.8` | Files covered by ≥ this fraction of specs are "shared" — reported explicitly instead of silently selecting everything. |
 | `specGlob` | `["**/*.spec.*", "**/*.test.*"]` | Identifies spec files for the new-spec/spec-changed rules. Scope it to your e2e dir to avoid matching unit tests. |
 
-`PW_TIA_COLLECT=1` enables collection locally; `PW_TIA_COLLECT=0` disables it in CI.
+### Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `PW_TIA_COLLECT=1` | Enable collection locally (auto-on in CI). |
+| `PW_TIA_COLLECT=0` | Disable collection even in CI. |
+| `PW_TIA_ROOT` | Override the project root the collector resolves paths against (defaults to `process.cwd()`). |
 
 ## Selection rules
 

@@ -7,8 +7,11 @@ import { eachMapping, TraceMap } from '@jridgewell/trace-mapping';
 import picomatch from 'picomatch';
 
 export interface CoverageEntry {
+  /** Script URL as reported by CDP (empty for anonymous/eval scripts). */
   url: string;
+  /** Script text; fetched over http/file when absent. Needed to locate the sourcemap. */
   source?: string;
+  /** V8 block coverage for this script. */
   functions: Profiler.FunctionCoverage[];
 }
 
@@ -131,6 +134,12 @@ function toRepoRelative(sourcePath: string, virtualDir: string, rootDir: string)
   return undefined;
 }
 
+/**
+ * Maps V8 precise-coverage entries to the repo-relative source files they
+ * executed: every sourcemap segment landing inside a `count > 0` range
+ * attributes its source. Scripts without a usable sourcemap land in
+ * `unresolved` — the caller keeps their specs conservative.
+ */
 export async function resolveSources(entries: CoverageEntry[], options: ResolveOptions): Promise<ResolveResult> {
   const { rootDir } = options;
   const serveRoot = options.serveRoot ?? rootDir;

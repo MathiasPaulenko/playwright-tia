@@ -23,6 +23,12 @@ export interface AffectedResult {
   shared?: { file: string; specCount: number }[];
 }
 
+/**
+ * Pure selection: manifest × changed files × current specs → specs to run.
+ * Never under-selects — anything unknown (missing manifest, unmapped spec,
+ * forceRun hit, git failure upstream) degrades to run-all or includes the
+ * spec conservatively.
+ */
 export function selectAffected(
   manifest: TiaManifest,
   changedFiles: string[],

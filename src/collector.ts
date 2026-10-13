@@ -48,6 +48,12 @@ async function record(session: CDPSession, testInfo: TestInfo, rootDir: string):
   await appendSpecFragment(join(rootDir, '.tia', 'fragments'), testInfo.parallelIndex, specPath, sources);
 }
 
+/**
+ * Drop-in replacement for `@playwright/test`'s `test`. Its auto `tia` fixture
+ * wraps every spec with CDP V8 coverage and appends the executed sources to
+ * `.tia/fragments` — active only when collection is enabled (see
+ * `shouldCollect`), and never fails a test.
+ */
 export const test = base.extend<{ tia: void }>({
   tia: [
     async ({ page, browserName }, use, testInfo) => {
