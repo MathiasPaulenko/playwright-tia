@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+/test-results/
+/playwright-report/
+/blob-report/
+/tia-manifest.json
+/examples/**/tia-manifest.json
+coverage/
+.env*
+
+# Notas internas de diseño e investigación — no publicar
+ref/
