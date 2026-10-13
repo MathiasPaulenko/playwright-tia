@@ -30,6 +30,23 @@ describe('loadManifest', () => {
     await writeFile(path, JSON.stringify({ version: 99, specs: { 'a.spec.ts': { sources: [], updatedAt: 1 } } }));
     expect(await loadManifest(path)).toEqual({ version: 1, specs: {} });
   });
+
+  it('drops malformed spec records instead of crashing', async () => {
+    const path = join(dir, 'tia-manifest.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        specs: {
+          'ok.spec.ts': { sources: ['src/a.ts'], updatedAt: 1 },
+          'bad.spec.ts': { sources: 'oops', updatedAt: 1 },
+          'null.spec.ts': null,
+        },
+      }),
+    );
+    const manifest = await loadManifest(path);
+    expect(Object.keys(manifest.specs)).toEqual(['ok.spec.ts']);
+  });
 });
 
 describe('saveManifest + loadManifest', () => {
@@ -107,6 +124,7 @@ describe('mergeFragments', () => {
 
     const stale = mergeSpec(emptyManifest(), 'deleted.spec.ts', ['src/x.ts'], 1);
     const merged = await mergeFragments(fragDir, stale, ['a.spec.ts']);
+    expect(Object.keys(merged.specs)).toEqual(['a.spec.ts']);
     expect(Object.keys(merged.specs)).toEqual(['a.spec.ts']);
     expect(merged.specs['a.spec.ts']!.sources).toEqual(['src/a.ts']);
   });

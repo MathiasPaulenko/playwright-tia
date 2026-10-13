@@ -1,5 +1,5 @@
 export { test, expect } from './collector.js';
-export { defaultConfig } from './config.js';
+export { defaultConfig, loadConfig } from './config.js';
 export type { TiaConfig } from './config.js';
 export {
   appendSpecFragment,

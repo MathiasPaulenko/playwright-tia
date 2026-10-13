@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import picomatch from 'picomatch';
 
-import { defaultConfig, type TiaConfig } from './config.js';
+import { existsSync } from 'node:fs';
+import { loadConfig } from './config.js';
 import { loadManifest, mergeFragments, normalizeSpecPath, saveManifest } from './manifest.js';
 import { selectAffected, type AffectedResult } from './selector.js';
 
@@ -27,21 +28,13 @@ Options:
   --base <ref>   Git ref to diff against (default: config baseRef).
   --json         Emit the full result as JSON.
   --all          Bypass selection and list every spec.
+  --dry-run      Accepted for readability; 'affected' never runs anything.
 `;
 
 export interface RunResult {
   code: number;
   stdout: string;
   stderr: string;
-}
-
-export async function loadConfig(rootDir: string): Promise<TiaConfig> {
-  try {
-    const raw = JSON.parse(await readFile(join(rootDir, 'playwright-tia.config.json'), 'utf8')) as Partial<TiaConfig>;
-    return { ...defaultConfig, ...raw, coverage: { ...defaultConfig.coverage, ...raw.coverage } };
-  } catch {
-    return defaultConfig;
-  }
 }
 
 /**
@@ -130,8 +123,12 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
 
   if (command === 'collect') {
     const manifestPath = join(cwd, config.manifestPath);
-    const currentSpecs = await walkSpecs(cwd, config.specGlob);
-    const manifest = await mergeFragments(join(cwd, '.tia', 'fragments'), await loadManifest(manifestPath), currentSpecs);
+    const loaded = await loadManifest(manifestPath);
+    // Prune only specs that no longer exist on disk — a specGlob that misses
+    // files must not wipe their records.
+    const existing = Object.keys(loaded.specs).filter((spec) => existsSync(join(cwd, spec)));
+    const currentSpecs = [...new Set([...(await walkSpecs(cwd, config.specGlob)), ...existing])];
+    const manifest = await mergeFragments(join(cwd, '.tia', 'fragments'), loaded, currentSpecs);
     await saveManifest(manifestPath, manifest);
     return { code: 0, stdout: '', stderr: `pw-tia: manifest written (${Object.keys(manifest.specs).length} spec(s))` };
   }
@@ -142,7 +139,10 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
 
   const flag = (name: string): string | undefined => {
     const idx = rest.indexOf(`--${name}`);
-    if (idx !== -1) return rest[idx + 1];
+    if (idx !== -1) {
+      const value = rest[idx + 1];
+      return value?.startsWith('--') ? undefined : value;
+    }
     const eq = rest.find((a) => a.startsWith(`--${name}=`));
     return eq?.split('=')[1];
   };

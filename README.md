@@ -43,7 +43,7 @@ import { expect, test } from 'playwright-tia';
 test('checks out', async ({ page }) => { /* same API */ });
 ```
 
-The `tia` fixture is automatic — when coverage collection is enabled it wraps every spec with CDP coverage and records the sources it executed. When disabled it does nothing.
+The `tia` fixture is automatic — when coverage collection is enabled it wraps every spec with CDP coverage and records the sources it executed. When disabled it does nothing. Collection never fails a test: errors degrade to a warning, failed/skipped specs are not recorded (their coverage would be partial), and scripts without a usable sourcemap produce a `pw-tia:` warning and leave the spec conservative.
 
 **2. Run with collection enabled:**
 
@@ -104,7 +104,9 @@ Optional `playwright-tia.config.json` in your project root:
 | `manifestPath` | `tia-manifest.json` | Where the spec ↔ source map lives. |
 | `baseRef` | `origin/main` | Git ref `affected` diffs against. |
 | `forceRun` | `["playwright.config.*", "package.json", "*lock*", ".github/**"]` | Changed files matching these globs run the whole suite — for things coverage can't see (infra, CSS, backend). |
+| `coverage.enabled` | `false` | Collect coverage on every run even without `PW_TIA_COLLECT`/`CI`. |
 | `coverage.filter` | `["!**/node_modules/**"]` | Exclusion globs applied to resolved sources. `node_modules` is always excluded. |
+| `coverage.serveRoot` | project root | FS dir your dev server's URL root maps to (e.g. `"dist"`) — needed when served files don't sit at the root. |
 | `sharedThreshold` | `0.8` | Files covered by ≥ this fraction of specs are "shared" — reported explicitly instead of silently selecting everything. |
 | `specGlob` | `["**/*.spec.*", "**/*.test.*"]` | Identifies spec files for the new-spec/spec-changed rules. Scope it to your e2e dir to avoid matching unit tests. |
 

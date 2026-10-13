@@ -28,6 +28,13 @@ export async function loadManifest(path: string): Promise<TiaManifest> {
     if (parsed.version !== 1 || typeof parsed.specs !== 'object' || parsed.specs === null) {
       return emptyManifest();
     }
+    for (const [spec, record] of Object.entries(parsed.specs)) {
+      if (!record || !Array.isArray(record.sources)) {
+        delete parsed.specs[spec];
+        continue;
+      }
+      record.sources = record.sources.filter((s): s is string => typeof s === 'string');
+    }
     return parsed;
   } catch {
     return emptyManifest();
@@ -36,7 +43,12 @@ export async function loadManifest(path: string): Promise<TiaManifest> {
 
 export async function saveManifest(path: string, manifest: TiaManifest): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  // Sorted keys keep the committed manifest diff-minimal across runs.
+  const sorted: TiaManifest = {
+    version: 1,
+    specs: Object.fromEntries(Object.entries(manifest.specs).sort(([a], [b]) => a.localeCompare(b))),
+  };
+  await writeFile(path, `${JSON.stringify(sorted, null, 2)}\n`, 'utf8');
 }
 
 /** Spec keys stay POSIX-style regardless of the platform Playwright ran on. */
@@ -94,8 +106,14 @@ export async function readFragments(fragmentsDir: string): Promise<Map<string, S
     const text = await readFile(join(fragmentsDir, file), 'utf8');
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
-      const { spec, sources, updatedAt } = JSON.parse(line) as SpecRecord & { spec: string };
-      records.set(normalizeSpecPath(spec), { sources, updatedAt });
+      try {
+        const { spec, sources, updatedAt } = JSON.parse(line) as SpecRecord & { spec: string };
+        if (typeof spec === 'string' && Array.isArray(sources)) {
+          records.set(normalizeSpecPath(spec), { sources, updatedAt });
+        }
+      } catch {
+        // A torn write (killed worker) must not break the whole merge.
+      }
     }
   }
   return records;

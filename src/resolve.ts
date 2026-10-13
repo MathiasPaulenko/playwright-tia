@@ -141,6 +141,8 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
 
   const sources = new Set<string>();
   const unresolved: string[] = [];
+  // Each bundle maps thousands of segments to the same few sources — cache.
+  const normalized = new Map<string, string | undefined>();
 
   for (const entry of entries) {
     if (!entry.url || entry.url.startsWith('node:')) continue;
@@ -174,7 +176,12 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
         if (!mapping.source) return;
         const offset = starts[mapping.generatedLine - 1]! + mapping.generatedColumn;
         if (!inIntervals(intervals, offset)) return;
-        const rel = toRepoRelative(mapping.source, virtualDir, rootDir);
+        const cacheKey = `${virtualDir}${mapping.source}`;
+        let rel = normalized.get(cacheKey);
+        if (rel === undefined && !normalized.has(cacheKey)) {
+          rel = toRepoRelative(mapping.source, virtualDir, rootDir);
+          normalized.set(cacheKey, rel);
+        }
         if (!rel || rel.includes('node_modules/')) return;
         if (exclusions.some((isMatch) => isMatch(rel))) return;
         sources.add(rel);

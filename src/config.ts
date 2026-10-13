@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 export interface TiaConfig {
   /** Repo-relative path of the manifest file. */
   manifestPath: string;
@@ -10,6 +13,11 @@ export interface TiaConfig {
     enabled: boolean;
     /** Globs to exclude resolved sources (vendor noise, node_modules). */
     filter: string[];
+    /**
+     * FS dir the dev server's URL root maps to (e.g. `dist` for a static
+     * preview build). Defaults to the project root.
+     */
+    serveRoot?: string;
   };
   /**
    * Files covered by more than this fraction of specs are treated as "shared"
@@ -39,3 +47,15 @@ export const defaultConfig: TiaConfig = {
   sharedThreshold: 0.8,
   specGlob: ['**/*.spec.*', '**/*.test.*'],
 };
+
+/** Reads playwright-tia.config.json merged over defaults; missing/invalid file → defaults. */
+export async function loadConfig(rootDir: string): Promise<TiaConfig> {
+  try {
+    const raw = JSON.parse(
+      await readFile(join(rootDir, 'playwright-tia.config.json'), 'utf8'),
+    ) as Partial<TiaConfig>;
+    return { ...defaultConfig, ...raw, coverage: { ...defaultConfig.coverage, ...raw.coverage } };
+  } catch {
+    return defaultConfig;
+  }
+}

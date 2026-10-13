@@ -14,10 +14,9 @@ const fragmentsDir = join(rootDir, '.tia', 'fragments');
 describe('collector e2e', () => {
   it('attributes each spec only the sources its coverage executed', { timeout: 180_000 }, async () => {
     await rm(fragmentsDir, { recursive: true, force: true });
-    await execFileAsync('npx', ['playwright', 'test'], {
+    await execFileAsync(process.execPath, [join(rootDir, 'node_modules/playwright/cli.js'), 'test'], {
       cwd: rootDir,
       env: { ...process.env, PW_TIA_COLLECT: '1' },
-      shell: process.platform === 'win32',
     });
 
     const manifest = await mergeFragments(fragmentsDir, emptyManifest());
