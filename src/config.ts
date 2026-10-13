@@ -17,6 +17,8 @@ export interface TiaConfig {
    * inflating the affected list.
    */
   sharedThreshold: number;
+  /** Glob(s) identifying spec files, used for the new-spec/spec-changed rules. */
+  specGlob: string[];
 }
 
 export const defaultConfig: TiaConfig = {
@@ -35,4 +37,5 @@ export const defaultConfig: TiaConfig = {
     filter: ['!**/node_modules/**'],
   },
   sharedThreshold: 0.8,
+  specGlob: ['**/*.spec.*', '**/*.test.*'],
 };
