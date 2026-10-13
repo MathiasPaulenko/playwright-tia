@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
+import { existsSync, realpathSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import picomatch from 'picomatch';
 
-import { existsSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { loadManifest, mergeFragments, normalizeRepoPath, saveManifest } from './manifest.js';
 import { selectAffected, type AffectedResult } from './selector.js';
@@ -184,7 +184,18 @@ function emit(result: AffectedResult, asJson: boolean, changedCount: number): Ru
   };
 }
 
-const isMain = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1];
+// npm's .bin shim invokes the script through an unnormalized path
+// ("node_modules/.bin/../pkg/dist/cli.js"), so argv[1] needs resolving
+// and realpath before comparing.
+const isMain = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(resolve(entry)) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 if (isMain) {
   void run(process.argv.slice(2)).then(({ code, stdout, stderr }) => {
     if (stdout) process.stdout.write(stdout);
