@@ -1,5 +1,7 @@
 # playwright-tia
 
+[![test](https://github.com/MathiasPaulenko/playwright-tia/actions/workflows/test.yml/badge.svg)](https://github.com/MathiasPaulenko/playwright-tia/actions/workflows/test.yml)
+
 Test Impact Analysis for Playwright — run only the specs affected by changes in your app's source code, using real per-spec V8 coverage. No instrumentation, no heuristics.
 
 ## Why

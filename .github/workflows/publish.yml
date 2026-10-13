@@ -29,6 +29,7 @@ jobs:
       # Trusted publishing requires npm CLI >= 11.5.1; Node 22 ships npm 10.x.
       - run: npm install -g npm@latest
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm run build
       # Idempotent: skip when the version is already on npm (e.g. the
