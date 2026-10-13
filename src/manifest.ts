@@ -96,7 +96,11 @@ export async function appendSpecFragment(
   await appendFile(join(fragmentsDir, `${workerId}.jsonl`), line, 'utf8');
 }
 
-/** Reads all `*.jsonl` fragments; per spec the last line wins. Missing dir → empty map. */
+/**
+ * Reads all `*.jsonl` fragments. A spec may appear several times (retries,
+ * multiple Playwright projects sharing a worker) — sources union, never
+ * overwrite, so each project's coverage survives. Missing dir → empty map.
+ */
 export async function readFragments(fragmentsDir: string): Promise<Map<string, SpecRecord>> {
   const records = new Map<string, SpecRecord>();
   let files: string[];
@@ -111,9 +115,13 @@ export async function readFragments(fragmentsDir: string): Promise<Map<string, S
       if (!line.trim()) continue;
       try {
         const { spec, sources, updatedAt } = JSON.parse(line) as SpecRecord & { spec: string };
-        if (typeof spec === 'string' && Array.isArray(sources)) {
-          records.set(normalizeRepoPath(spec), { sources, updatedAt });
-        }
+        if (typeof spec !== 'string' || !Array.isArray(sources)) continue;
+        const key = normalizeRepoPath(spec);
+        const prev = records.get(key);
+        records.set(key, {
+          sources: [...new Set([...(prev?.sources ?? []), ...sources])].sort(),
+          updatedAt: Math.max(prev?.updatedAt ?? 0, updatedAt),
+        });
       } catch {
         // A torn write (killed worker) must not break the whole merge.
       }

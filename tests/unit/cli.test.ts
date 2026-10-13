@@ -133,6 +133,27 @@ describe('pw-tia affected', () => {
   });
 });
 
+describe('pw-tia doctor', () => {
+  it('reports a healthy setup', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
+    const { code, stdout } = await run(['doctor'], dir);
+    expect(code).toBe(0);
+    expect(stdout).toContain('manifest: 2 spec record(s)');
+    expect(stdout).toContain('specs on disk: 2');
+    expect(stdout).toContain('git: repository ok');
+  });
+
+  it('warns when the manifest is missing and specs have no coverage', async () => {
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
+    const { stdout } = await run(['doctor'], dir);
+    expect(stdout).toContain('manifest: missing or empty');
+    expect(stdout).toContain('no coverage yet: 2 spec(s)');
+  });
+});
+
 describe('pw-tia usage', () => {
   it('prints usage on --help and unknown commands fail', async () => {
     const help = await run(['--help'], dir);

@@ -1,5 +1,5 @@
 import { join, relative } from 'node:path';
-import { test as base, type CDPSession, type TestInfo } from '@playwright/test';
+import { test as base, type CDPSession, type Page, type TestInfo } from '@playwright/test';
 
 import { loadConfig, type TiaConfig } from './config.js';
 import { appendSpecFragment, normalizeRepoPath } from './manifest.js';
@@ -25,19 +25,36 @@ async function shouldCollect(rootDir: string): Promise<boolean> {
   return collectEnabled(process.env, (await tiaConfig(rootDir)).coverage.enabled);
 }
 
-async function record(session: CDPSession, testInfo: TestInfo, rootDir: string): Promise<void> {
-  const { result } = await session.send('Profiler.takePreciseCoverage');
-  await session.send('Profiler.stopPreciseCoverage');
-  const entries: CoverageEntry[] = await Promise.all(
-    result.map(async (script) => ({
-      url: script.url,
-      functions: script.functions,
-      source: await session
-        .send('Debugger.getScriptSource', { scriptId: script.scriptId })
-        .then((s) => s.scriptSource)
-        .catch(() => undefined),
-    })),
-  );
+async function startCoverage(page: Page, sessions: Set<CDPSession>): Promise<void> {
+  const session = await page.context().newCDPSession(page);
+  await session.send('Debugger.enable');
+  await session.send('Profiler.enable');
+  await session.send('Profiler.startPreciseCoverage', { callCount: true, detailed: true });
+  sessions.add(session);
+}
+
+async function record(sessions: Set<CDPSession>, testInfo: TestInfo, rootDir: string): Promise<void> {
+  const entries: CoverageEntry[] = [];
+  for (const session of sessions) {
+    try {
+      const { result } = await session.send('Profiler.takePreciseCoverage');
+      await session.send('Profiler.stopPreciseCoverage');
+      entries.push(
+        ...(await Promise.all(
+          result.map(async (script) => ({
+            url: script.url,
+            functions: script.functions,
+            source: await session
+              .send('Debugger.getScriptSource', { scriptId: script.scriptId })
+              .then((s) => s.scriptSource)
+              .catch(() => undefined),
+          })),
+        )),
+      );
+    } catch {
+      // Page closed mid-test or session died — its coverage is lost, not fatal.
+    }
+  }
   const config = await tiaConfig(rootDir);
   const { sources, unresolved } = await resolveSources(entries, {
     rootDir,
@@ -68,33 +85,35 @@ export const test = base.extend<{ tia: void }>({
         await use();
         return;
       }
-      const session = await page.context().newCDPSession(page);
+      const sessions = new Set<CDPSession>();
+      // Specs may open extra pages/popups mid-test — cover them too.
+      const onPage = (p: Page): void => {
+        void startCoverage(p, sessions).catch(() => {});
+      };
       try {
-        await session.send('Debugger.enable');
-        await session.send('Profiler.enable');
-        await session.send('Profiler.startPreciseCoverage', { callCount: true, detailed: true });
+        await startCoverage(page, sessions);
+        page.context().on('page', onPage);
       } catch (error) {
         // Coverage must never break a test run — degrade to no recording.
         console.warn(`pw-tia: coverage unavailable (${error instanceof Error ? error.message : error})`);
-        await session.detach().catch(() => {});
+        for (const s of sessions) await s.detach().catch(() => {});
         await use();
         return;
       }
       try {
         await use();
       } finally {
+        page.context().off('page', onPage);
         try {
           // A spec that failed mid-run produced partial coverage; recording it
           // would under-select later. Only completed runs update the manifest.
           if (testInfo.status === 'passed') {
-            await record(session, testInfo, rootDir);
-          } else {
-            await session.send('Profiler.stopPreciseCoverage').catch(() => {});
+            await record(sessions, testInfo, rootDir);
           }
         } catch (error) {
           console.warn(`pw-tia: coverage failed for ${testInfo.file} (${error instanceof Error ? error.message : error})`);
         }
-        await session.detach().catch(() => {});
+        for (const s of sessions) await s.detach().catch(() => {});
       }
     },
     { auto: true },

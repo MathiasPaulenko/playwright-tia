@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import picomatch from 'picomatch';
 
-import { loadConfig } from './config.js';
+import { loadConfig, type TiaConfig } from './config.js';
 import { loadManifest, mergeFragments, normalizeRepoPath, saveManifest } from './manifest.js';
 import { selectAffected, type AffectedResult } from './selector.js';
 
@@ -23,6 +23,7 @@ Commands:
   affected   Print the specs to run for the current diff (stdout = spec paths,
              explanations go to stderr).
   collect    Merge .tia/fragments into tia-manifest.json after a coverage run.
+  doctor     Diagnose the setup: manifest health, uncovered specs, shared files.
 
 Options:
   --base <ref>   Git ref to diff against (default: config baseRef).
@@ -121,6 +122,10 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
 
   const config = await loadConfig(cwd);
 
+  if (command === 'doctor') {
+    return doctor(cwd, config);
+  }
+
   if (command === 'collect') {
     const manifestPath = join(cwd, config.manifestPath);
     const loaded = await loadManifest(manifestPath);
@@ -171,6 +176,56 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
     return emit(runAllSpecs(`git error: ${error instanceof Error ? error.message : String(error)}`), asJson, 0);
   }
   return emit(selectAffected(manifest, changed, currentSpecs, config), asJson, changed.length);
+}
+
+async function doctor(cwd: string, config: TiaConfig): Promise<RunResult> {
+  const lines: string[] = [];
+
+  const configExists = existsSync(join(cwd, 'playwright-tia.config.json'));
+  lines.push(configExists ? 'config: playwright-tia.config.json' : 'config: defaults (no playwright-tia.config.json)');
+
+  const gitOk = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd })
+    .then(() => true)
+    .catch(() => false);
+  lines.push(gitOk ? 'git: repository ok' : 'git: NOT a repository — affected will always run everything');
+
+  const manifest = await loadManifest(join(cwd, config.manifestPath));
+  const specCount = Object.keys(manifest.specs).length;
+  lines.push(specCount > 0 ? `manifest: ${specCount} spec record(s)` : 'manifest: missing or empty — first run will execute everything and learn');
+
+  const diskSpecs = await walkSpecs(cwd, config.specGlob);
+  lines.push(`specs on disk: ${diskSpecs.length} (via specGlob)`);
+
+  const missing = diskSpecs.filter((s) => !manifest.specs[s]);
+  if (missing.length > 0) {
+    lines.push(`no coverage yet: ${missing.length} spec(s) always run (new-spec)${list(missing)}`);
+  }
+  const orphans = Object.keys(manifest.specs).filter((s) => !existsSync(join(cwd, s)));
+  if (orphans.length > 0) {
+    lines.push(`stale records: ${orphans.length} spec(s) no longer exist — 'collect' prunes them${list(orphans)}`);
+  }
+  const empty = Object.entries(manifest.specs)
+    .filter(([, r]) => r.sources.length === 0)
+    .map(([s]) => s);
+  if (empty.length > 0) {
+    lines.push(`zero sources: ${empty.length} spec(s) always run (no-sources)${list(empty)}`);
+  }
+  const coverage = new Map<string, number>();
+  for (const record of Object.values(manifest.specs)) {
+    for (const src of record.sources) coverage.set(src, (coverage.get(src) ?? 0) + 1);
+  }
+  const shared = [...coverage.entries()]
+    .filter(([, n]) => specCount > 0 && n / specCount >= config.sharedThreshold)
+    .sort((a, b) => b[1] - a[1]);
+  if (shared.length > 0) {
+    lines.push(`shared files (>=${config.sharedThreshold}):${list(shared.map(([f, n]) => `${f} (${n} specs)`))}`);
+  }
+  return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' };
+
+  function list(items: string[]): string {
+    const shown = items.slice(0, 5);
+    return `\n    ${shown.join('\n    ')}${items.length > shown.length ? `\n    … +${items.length - shown.length}` : ''}`;
+  }
 }
 
 function emit(result: AffectedResult, asJson: boolean, changedCount: number): RunResult {

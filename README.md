@@ -1,6 +1,7 @@
 # playwright-tia
 
 [![test](https://github.com/MathiasPaulenko/playwright-tia/actions/workflows/test.yml/badge.svg)](https://github.com/MathiasPaulenko/playwright-tia/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/playwright-tia)](https://www.npmjs.com/package/playwright-tia)
 
 Test Impact Analysis for Playwright — run only the specs affected by changes in your app's source code, using real per-spec V8 coverage. No instrumentation, no heuristics.
 
@@ -92,6 +93,19 @@ pw-tia: 3 affected spec(s) from 1 changed file(s)
 
 Merges `.tia/fragments/*.jsonl` into `tia-manifest.json` and prunes records for specs that no longer exist. Run it after every coverage-enabled suite.
 
+### `pw-tia doctor`
+
+Diagnoses the setup — config, git, manifest health, specs with no coverage, stale records, and files shared by most of the suite:
+
+```text
+config: playwright-tia.config.json
+git: repository ok
+manifest: 4 spec record(s)
+specs on disk: 4 (via specGlob)
+shared files (>=0.8):
+    src/shell.ts (4 specs)
+```
+
 ## Configuration
 
 Optional `playwright-tia.config.json` in your project root:
@@ -159,7 +173,7 @@ See [`examples/demo-app`](examples/demo-app) for a working project and [`demo.ym
 - **Collection is Chromium-only** (CDP). The manifest applies to runs on all browsers.
 - **Sourcemaps required.** Your test build must emit them (inline or external `.map`). Scripts without a resolvable map are ignored, leaving the spec conservative — it runs more often, never less.
 - **Discrimination follows code-splitting.** Coverage attributes the chunks a spec loaded, so lazy-loaded routes give sharp attribution; a single flat bundle attributes everything it contains and `sharedThreshold` becomes your main signal.
-- **Main-page coverage.** Multi-tab flows, popups, iframes and service workers aren't covered yet — specs relying on them get broader attribution.
+- **Iframes and workers.** Coverage spans every page/popup in the spec's browser context, but not OOPIF iframes or service workers — specs relying on them get broader attribution.
 - **First run runs everything.** Without a manifest there is nothing to select with — it runs the whole suite and learns.
 
 ## License

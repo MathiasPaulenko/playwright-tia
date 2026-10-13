@@ -112,12 +112,12 @@ describe('appendSpecFragment + readFragments', () => {
     expect(records.get('tests/c.spec.ts')).toEqual({ sources: ['src/c.ts'], updatedAt: 12 });
   });
 
-  it('last write wins when a spec re-runs', async () => {
+  it('unions sources when a spec records more than once (retries, projects)', async () => {
     const fragDir = join(dir, 'fragments');
     await appendSpecFragment(fragDir, 0, 'a.spec.ts', ['src/old.ts'], 1);
-    await appendSpecFragment(fragDir, 0, 'a.spec.ts', ['src/new.ts'], 2);
+    await appendSpecFragment(fragDir, 1, 'a.spec.ts', ['src/new.ts'], 2);
     await expect(readFragments(fragDir)).resolves.toEqual(
-      new Map([['a.spec.ts', { sources: ['src/new.ts'], updatedAt: 2 }]]),
+      new Map([['a.spec.ts', { sources: ['src/new.ts', 'src/old.ts'], updatedAt: 2 }]]),
     );
   });
 

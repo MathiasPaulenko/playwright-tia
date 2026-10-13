@@ -152,13 +152,13 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
   // Each bundle maps thousands of segments to the same few sources — cache.
   const normalized = new Map<string, string | undefined>();
 
-  for (const entry of entries) {
-    if (!entry.url || entry.url.startsWith('node:')) continue;
+  const resolveEntry = async (entry: CoverageEntry): Promise<void> => {
+    if (!entry.url || entry.url.startsWith('node:')) return;
 
     const source = entry.source ?? (await fetchText(entry.url));
     if (source === undefined) {
       unresolved.push(entry.url);
-      continue;
+      return;
     }
 
     const mapRef = MAP_REF_RE.exec(source)?.[1];
@@ -172,7 +172,7 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
       // A script with no sourcemap resolves only to the bundle itself —
       // useless for source selection, so it counts as unresolved.
       unresolved.push(entry.url);
-      continue;
+      return;
     }
 
     try {
@@ -199,7 +199,8 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
     } catch {
       unresolved.push(entry.url);
     }
-  }
+  };
 
+  await Promise.all(entries.map(resolveEntry));
   return { sources: [...sources].sort(), unresolved };
 }
