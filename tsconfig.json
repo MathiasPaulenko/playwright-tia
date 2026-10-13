@@ -12,5 +12,6 @@
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "tests", "*.config.ts"]
+  "include": ["src", "tests", "*.config.ts"],
+  "exclude": ["tests/fixtures"]
 }
