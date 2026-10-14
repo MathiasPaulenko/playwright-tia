@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { readdir } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import picomatch from 'picomatch';
@@ -16,20 +17,27 @@ const execFileAsync = promisify(execFile);
 const USAGE = `pw-tia — Test Impact Analysis for Playwright
 
 Usage:
-  pw-tia affected [--base <ref>] [--json] [--all]
+  pw-tia affected [--base <ref> | --files <list>] [--json] [--all]
+  pw-tia run [--base <ref> | --files <list>] [--all] [--dry-run] [-- <playwright args>]
   pw-tia collect
+  pw-tia doctor
 
 Commands:
   affected   Print the specs to run for the current diff (stdout = spec paths,
              explanations go to stderr).
+  run        Run the affected specs with Playwright — 'pw-tia run' is the
+             cross-platform equivalent of 'playwright test $(pw-tia affected)'.
   collect    Merge .tia/fragments into tia-manifest.json after a coverage run.
   doctor     Diagnose the setup: manifest health, uncovered specs, shared files.
 
 Options:
-  --base <ref>   Git ref to diff against (default: config baseRef).
-  --json         Emit the full result as JSON.
-  --all          Bypass selection and list every spec.
-  --dry-run      Accepted for readability; 'affected' never runs anything.
+  --base <ref>     Git ref to diff against (default: config baseRef).
+  --files <list>   Select from an explicit file list instead of git —
+                   comma/newline separated, or '-' to read stdin (e.g. the
+                   changed-files output of Nx/Turborepo or another VCS).
+  --json           Emit the full result as JSON.
+  --all            Bypass selection and list/run every spec.
+  --dry-run        'run' prints the playwright command without executing it.
 `;
 
 export interface RunResult {
@@ -114,7 +122,7 @@ function explain(result: AffectedResult, changedCount: number): string {
   return lines.join('\n');
 }
 
-export async function run(argv: string[], cwd: string = process.cwd()): Promise<RunResult> {
+export async function run(argv: string[], cwd: string = process.cwd(), stdinText?: string): Promise<RunResult> {
   const [command, ...rest] = argv;
   if (!command || command === '--help' || command === '-h') {
     return { code: 0, stdout: USAGE, stderr: '' };
@@ -138,22 +146,33 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
     return { code: 0, stdout: '', stderr: `pw-tia: manifest written (${Object.keys(manifest.specs).length} spec(s))` };
   }
 
-  if (command !== 'affected') {
+  if (command !== 'affected' && command !== 'run') {
     return { code: 1, stdout: '', stderr: `pw-tia: unknown command '${command}'\n${USAGE}` };
   }
 
+  // Everything after '--' is forwarded to playwright (run only); our own
+  // flags must be parsed before it — playwright args may look like ours.
+  const sep = rest.indexOf('--');
+  const own = sep === -1 ? rest : rest.slice(0, sep);
+  const pwArgs = command === 'run' && sep !== -1 ? rest.slice(sep + 1) : [];
+
   const flag = (name: string): string | undefined => {
-    const idx = rest.indexOf(`--${name}`);
+    const idx = own.indexOf(`--${name}`);
     if (idx !== -1) {
-      const value = rest[idx + 1];
+      const value = own[idx + 1];
       return value?.startsWith('--') ? undefined : value;
     }
-    const eq = rest.find((a) => a.startsWith(`--${name}=`));
+    const eq = own.find((a) => a.startsWith(`--${name}=`));
     return eq?.split('=')[1];
   };
   const base = flag('base') ?? config.baseRef;
-  const asJson = rest.includes('--json');
-  const all = rest.includes('--all');
+  const filesFlag = flag('files');
+  if (own.includes('--files') && filesFlag === undefined) {
+    return { code: 1, stdout: '', stderr: 'pw-tia: --files expects a list or - (stdin)' };
+  }
+  const asJson = own.includes('--json');
+  const all = own.includes('--all');
+  const dryRun = own.includes('--dry-run');
 
   const manifest = await loadManifest(join(cwd, config.manifestPath));
   const currentSpecs = await walkSpecs(cwd, config.specGlob);
@@ -165,17 +184,111 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
     runAll: true,
     reason,
   });
+
+  let result: AffectedResult;
+  let changedCount = 0;
   if (all) {
-    return emit(runAllSpecs('--all'), asJson, 0);
+    result = runAllSpecs('--all');
+  } else if (filesFlag !== undefined) {
+    const raw = filesFlag === '-' ? (stdinText ?? (await readStdin())) : filesFlag;
+    const changed = await relativize(cwd, parseFileList(raw));
+    changedCount = changed.length;
+    result = selectAffected(manifest, changed, currentSpecs, config);
+  } else {
+    let changed: string[];
+    try {
+      changed = await gitChangedFiles(cwd, base);
+      result = selectAffected(manifest, changed, currentSpecs, config);
+    } catch (error) {
+      changed = [];
+      result = runAllSpecs(`git error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    changedCount = changed.length;
   }
 
-  let changed: string[];
-  try {
-    changed = await gitChangedFiles(cwd, base);
-  } catch (error) {
-    return emit(runAllSpecs(`git error: ${error instanceof Error ? error.message : String(error)}`), asJson, 0);
+  if (command === 'affected') {
+    return emit(result, asJson, changedCount);
   }
-  return emit(selectAffected(manifest, changed, currentSpecs, config), asJson, changed.length);
+
+  // 'run'
+  if (!result.runAll && result.specs.length === 0) {
+    return { code: 0, stdout: '', stderr: 'pw-tia: nothing affected — no specs to run' };
+  }
+  // runAll passes no spec args: playwright's own testMatch applies, which is
+  // more faithful than feeding it our glob-discovered list.
+  const specArgs = result.runAll ? [] : result.specs.map((s) => s.spec);
+  const cmd = `playwright test${[...specArgs, ...pwArgs].map((a) => ` ${a}`).join('')}`;
+  if (dryRun) {
+    return { code: 0, stdout: `${cmd}\n`, stderr: explain(result, changedCount) };
+  }
+  process.stderr.write(`${explain(result, changedCount)}\n`);
+  try {
+    return { code: await spawnPlaywright(cwd, specArgs, pwArgs), stdout: '', stderr: '' };
+  } catch (error) {
+    return { code: 1, stdout: '', stderr: `pw-tia: cannot run playwright — ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+/** Accepts repo-relative or rootDir-relative paths; strips the monorepo prefix. */
+async function relativize(rootDir: string, files: string[]): Promise<string[]> {
+  let prefix = '';
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: rootDir });
+    prefix = normalizeRepoPath(relative(stdout.trim(), resolve(rootDir)));
+  } catch {
+    // not a git repo — paths are already relative to rootDir
+  }
+  return files
+    .map((f) => {
+      const file = normalizeRepoPath(f.trim());
+      return prefix && file.startsWith(`${prefix}/`) ? file.slice(prefix.length + 1) : file;
+    })
+    .filter(Boolean)
+    .sort();
+}
+
+function parseFileList(raw: string): string[] {
+  return raw.split(/[\s,]+/).filter(Boolean);
+}
+
+function readStdin(): Promise<string> {
+  return new Promise((resolvePromise) => {
+    if (process.stdin.isTTY) {
+      resolvePromise('');
+      return;
+    }
+    let data = '';
+    process.stdin.on('data', (chunk: Buffer) => (data += chunk.toString()));
+    process.stdin.on('end', () => resolvePromise(data));
+    process.stdin.on('error', () => resolvePromise(data));
+  });
+}
+
+async function spawnPlaywright(cwd: string, specArgs: string[], pwArgs: string[]): Promise<number> {
+  // Resolve the playwright bin from the project's own install — 'playwright'
+  // is a real package under @playwright/test (our peer dep). Its exports map
+  // hides ./cli.js, so go through package.json's directory instead.
+  const require = createRequire(join(cwd, 'pw-tia.js'));
+  const cliPath = [
+    () => require.resolve('playwright/package.json'),
+    () => require.resolve('@playwright/test/package.json'), // pnpm: playwright may not hoist
+  ]
+    .map((fn) => {
+      try {
+        return join(dirname(fn()), 'cli.js');
+      } catch {
+        return '';
+      }
+    })
+    .find((p) => p && existsSync(p));
+  if (!cliPath) {
+    throw new Error('cannot find the playwright cli — is @playwright/test installed?');
+  }
+  return await new Promise((resolvePromise, reject) => {
+    spawn(process.execPath, [cliPath, 'test', ...specArgs, ...pwArgs], { cwd, stdio: 'inherit' })
+      .on('exit', (code) => resolvePromise(code ?? 1))
+      .on('error', reject);
+  });
 }
 
 async function doctor(cwd: string, config: TiaConfig): Promise<RunResult> {

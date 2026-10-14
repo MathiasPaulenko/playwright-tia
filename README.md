@@ -66,7 +66,8 @@ Coverage uses V8's `Profiler.startPreciseCoverage`, which costs ~2–10% of JS e
 **4. Select on each PR:**
 
 ```bash
-npx playwright test $(npx pw-tia affected --base origin/main)
+npx pw-tia run --base origin/main
+# or, in bash: npx playwright test $(npx pw-tia affected --base origin/main)
 ```
 
 ## CLI
@@ -79,7 +80,11 @@ Prints the spec paths to run — one per line on **stdout**, so it composes dire
 npx pw-tia affected --base origin/main          # spec list
 npx pw-tia affected --base main --json          # full result with reasons
 npx pw-tia affected --all                       # bypass selection, list everything
+npx pw-tia affected --files src/cart.ts         # explicit file list, no git needed
+git diff --name-only main | npx pw-tia affected --files -   # or pipe it via stdin
 ```
+
+`--files` decouples selection from git — pass the changed-files list from Nx, Turborepo, your CI system, or a non-git VCS.
 
 Example stderr:
 
@@ -88,6 +93,18 @@ pw-tia: 3 affected spec(s) from 1 changed file(s)
   src/cart.ts → tests/cart.spec.ts, tests/checkout.spec.ts, tests/orders.spec.ts
   shared: src/shell.ts is covered by 4 spec(s) — wide selection expected
 ```
+
+### `pw-tia run`
+
+Selects the affected specs and runs them with Playwright — the cross-platform equivalent of `playwright test $(pw-tia affected)` (the shell substitution doesn't work in PowerShell/cmd). Accepts the same `--base`/`--files`/`--all` flags; everything after `--` is forwarded to `playwright test`:
+
+```bash
+npx pw-tia run --base origin/main                  # run only affected specs
+npx pw-tia run --base origin/main -- --grep smoke  # forward playwright args
+npx pw-tia run --dry-run                           # print the command, don't run
+```
+
+When nothing is affected it exits 0 without invoking Playwright; when selection degrades to run-all it invokes `playwright test` with no filters (Playwright's own `testMatch` applies).
 
 ### `pw-tia collect`
 
@@ -164,7 +181,7 @@ Unmatched changes (docs, README) select nothing. Monorepos work: run `pw-tia` fr
 - run: npx pw-tia collect                      # update tia-manifest.json, commit it
 
 # on PR jobs:
-- run: npx playwright test $(npx pw-tia affected --base origin/${{ github.base_ref }})
+- run: npx pw-tia run --base origin/${{ github.base_ref }}
 ```
 
 See [`examples/demo-app`](examples/demo-app) for a working project and [`demo.yml`](.github/workflows/demo.yml) for a CI job that asserts the exact selection.

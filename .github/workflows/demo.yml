@@ -53,4 +53,4 @@ jobs:
           ! echo "$SPECS" | grep -q 'profile.spec.ts'
       - name: run only affected specs
         working-directory: examples/demo-app
-        run: npx playwright test $(npx pw-tia affected --base HEAD~1)
+        run: npx pw-tia run --base HEAD~1

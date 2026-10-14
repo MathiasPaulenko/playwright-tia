@@ -133,6 +133,74 @@ describe('pw-tia affected', () => {
   });
 });
 
+describe('pw-tia affected --files', () => {
+  it('selects from an explicit file list instead of the git diff', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
+    // clean tree — git diff is empty, --files drives the selection
+    const { stdout, code } = await run(['affected', '--files', 'src/cart.ts'], dir);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('tests/cart.spec.ts');
+  });
+
+  it('accepts comma- and newline-separated lists', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    const { stdout } = await run(['affected', '--files', 'src/cart.ts,src/profile.ts'], dir);
+    expect(stdout.trim().split('\n').sort()).toEqual(['tests/cart.spec.ts', 'tests/profile.spec.ts']);
+  });
+
+  it('reads the list from stdin with --files -', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    const { stdout } = await run(['affected', '--files', '-'], dir, 'src/profile.ts\n');
+    expect(stdout.trim()).toBe('tests/profile.spec.ts');
+  });
+
+  it('works without a git repository', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'tia-nogit-'));
+    try {
+      await writeFile(join(plain, 'tia-manifest.json'), JSON.stringify(manifest));
+      await mkdir(join(plain, 'src'), { recursive: true });
+      await writeFile(join(plain, 'src', 'cart.ts'), 'x');
+      const { stdout, code } = await run(['affected', '--files', 'src/cart.ts'], plain);
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('tests/cart.spec.ts');
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pw-tia run', () => {
+  it('--dry-run prints the playwright command with the selected specs', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
+    const { stdout, stderr, code } = await run(['run', '--files', 'src/cart.ts', '--dry-run'], dir);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('playwright test tests/cart.spec.ts');
+    expect(stderr).toContain('1 affected spec(s)');
+  });
+
+  it('runs the whole suite (no spec args) when selection degrades to run-all', async () => {
+    const { stdout } = await run(['run', '--all', '--dry-run'], dir);
+    expect(stdout.trim()).toBe('playwright test');
+  });
+
+  it('exits 0 with an explanation when nothing is affected', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    const { stdout, stderr, code } = await run(['run', '--files', 'README.md'], dir);
+    expect(code).toBe(0);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('nothing affected');
+  });
+
+  it('forwards args after -- to playwright', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    const { stdout } = await run(['run', '--files', 'src/cart.ts', '--dry-run', '--', '--grep', 'smoke'], dir);
+    expect(stdout.trim()).toBe('playwright test tests/cart.spec.ts --grep smoke');
+  });
+});
+
 describe('pw-tia doctor', () => {
   it('reports a healthy setup', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
