@@ -1,5 +1,5 @@
 import { join, relative } from 'node:path';
-import { test as base, type CDPSession, type Page, type TestInfo } from '@playwright/test';
+import { test as base, type CDPSession, type Frame, type Page, type TestInfo } from '@playwright/test';
 
 import { loadConfig, type TiaConfig } from './config.js';
 import { appendSpecFragment, normalizeRepoPath } from './manifest.js';
@@ -25,12 +25,15 @@ async function shouldCollect(rootDir: string): Promise<boolean> {
   return collectEnabled(process.env, (await tiaConfig(rootDir)).coverage.enabled);
 }
 
-async function startCoverage(page: Page, sessions: Set<CDPSession>): Promise<void> {
-  const session = await page.context().newCDPSession(page);
+async function startCoverageOnSession(session: CDPSession, sessions: Set<CDPSession>): Promise<void> {
   await session.send('Debugger.enable');
   await session.send('Profiler.enable');
   await session.send('Profiler.startPreciseCoverage', { callCount: true, detailed: true });
   sessions.add(session);
+}
+
+async function startCoverage(page: Page, sessions: Set<CDPSession>): Promise<void> {
+  await startCoverageOnSession(await page.context().newCDPSession(page), sessions);
 }
 
 async function record(sessions: Set<CDPSession>, testInfo: TestInfo, rootDir: string): Promise<void> {
@@ -90,9 +93,25 @@ export const test = base.extend<{ tia: void }>({
       const onPage = (p: Page): void => {
         void startCoverage(p, sessions).catch(() => {});
       };
+      // Cross-origin iframes run as separate CDP targets (OOPIF) — the page
+      // session never sees them. Same-origin iframes share the page target,
+      // so only out-of-process frames need their own session.
+      const coveredFrames = new WeakSet<Frame>();
+      const attachFrame = async (frame: Frame): Promise<void> => {
+        if (!frame.parentFrame() || coveredFrames.has(frame)) return;
+        if (!/^https?:/.test(frame.url()) || new URL(frame.url()).origin === new URL(page.url()).origin) return;
+        coveredFrames.add(frame);
+        await startCoverageOnSession(await page.context().newCDPSession(frame), sessions);
+      };
+      const onFrame = (f: Frame): void => {
+        void attachFrame(f).catch(() => {});
+      };
       try {
         await startCoverage(page, sessions);
         page.context().on('page', onPage);
+        page.on('frameattached', onFrame);
+        page.on('framenavigated', onFrame);
+        for (const frame of page.frames()) await attachFrame(frame).catch(() => {});
       } catch (error) {
         // Coverage must never break a test run — degrade to no recording.
         console.warn(`pw-tia: coverage unavailable (${error instanceof Error ? error.message : error})`);
@@ -104,6 +123,8 @@ export const test = base.extend<{ tia: void }>({
         await use();
       } finally {
         page.context().off('page', onPage);
+        page.off('frameattached', onFrame);
+        page.off('framenavigated', onFrame);
         try {
           // A spec that failed mid-run produced partial coverage; recording it
           // would under-select later. Only completed runs update the manifest.

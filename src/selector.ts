@@ -3,7 +3,7 @@ import picomatch from 'picomatch';
 import type { TiaConfig } from './config.js';
 import { normalizeRepoPath, type TiaManifest } from './manifest.js';
 
-export type AffectedReason = 'changed-source' | 'spec-changed' | 'new-spec' | 'no-sources' | 'shared-file' | 'run-all';
+export type AffectedReason = 'changed-source' | 'spec-changed' | 'new-spec' | 'no-sources' | 'shared-file' | 'stale-record' | 'run-all';
 
 export interface AffectedSpec {
   /** Spec path as Playwright reports it (repo-relative). */
@@ -34,6 +34,7 @@ export function selectAffected(
   changedFiles: string[],
   currentSpecs: string[],
   config: TiaConfig,
+  now: number = Math.floor(Date.now() / 1000),
 ): AffectedResult {
   const manifestSpecs = Object.keys(manifest.specs);
   const allSpecs = new Set([...manifestSpecs, ...currentSpecs.map(normalizeRepoPath)]);
@@ -66,6 +67,7 @@ export function selectAffected(
   );
 
   const changed = new Set(changedFiles.map(normalizeRepoPath));
+  const staleBefore = config.recordMaxAgeDays > 0 ? now - config.recordMaxAgeDays * 86400 : 0;
   const specMatchers = config.specGlob.map((g) => picomatch(g));
   const isSpecPath = (p: string) => specMatchers.some((m) => m(p));
 
@@ -82,6 +84,12 @@ export function selectAffected(
     }
     if (record.sources.length === 0) {
       specs.push({ spec, triggeredBy: [], reason: 'no-sources' });
+      continue;
+    }
+    // Stale records may miss sources the spec covers today — run it always
+    // until a fresh coverage run rewrites the record.
+    if (config.recordMaxAgeDays > 0 && record.updatedAt < staleBefore) {
+      specs.push({ spec, triggeredBy: [], reason: 'stale-record' });
       continue;
     }
     const triggeredBy = record.sources.filter((s) => changed.has(s));

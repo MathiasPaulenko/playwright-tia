@@ -27,6 +27,12 @@ export interface TiaConfig {
   sharedThreshold: number;
   /** Glob(s) identifying spec files, used for the new-spec/spec-changed rules. */
   specGlob: string[];
+  /**
+   * Manifest records older than this many days go stale: their spec always
+   * runs until refreshed (the recorded sources may no longer match the code).
+   * 0 disables staleness.
+   */
+  recordMaxAgeDays: number;
 }
 
 export const defaultConfig: TiaConfig = {
@@ -46,6 +52,7 @@ export const defaultConfig: TiaConfig = {
   },
   sharedThreshold: 0.8,
   specGlob: ['**/*.spec.*', '**/*.test.*'],
+  recordMaxAgeDays: 30,
 };
 
 /** Reads playwright-tia.config.json merged over defaults; missing/invalid file → defaults. */

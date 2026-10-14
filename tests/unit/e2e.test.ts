@@ -32,5 +32,13 @@ describe('collector e2e', () => {
 
     expect(specA!.sources).toContain('tests/e2e/app/src/main.ts');
     expect(specB!.sources).toContain('tests/e2e/app/src/main.ts');
+
+    // Cross-origin iframe (OOPIF) gets its own CDP target — the frame's
+    // sources must be attributed to the spec that drove it.
+    const specC = manifest.specs['tests/e2e/feature-c.spec.ts'];
+    expect(specC).toBeDefined();
+    expect(specC!.sources).toContain('tests/e2e/app/src/featureC.ts');
+    expect(specC!.sources).not.toContain('tests/e2e/app/src/featureA.ts');
+    expect(specC!.sources).not.toContain('tests/e2e/app/src/featureB.ts');
   });
 });

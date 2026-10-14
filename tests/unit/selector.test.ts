@@ -4,7 +4,8 @@ import { defaultConfig } from '../../src/config.js';
 import { emptyManifest, mergeSpec } from '../../src/manifest.js';
 import { selectAffected } from '../../src/selector.js';
 
-const config = { ...defaultConfig, specGlob: ['**/*.spec.ts'] };
+// recordMaxAgeDays off — fixtures use synthetic updatedAt timestamps.
+const config = { ...defaultConfig, specGlob: ['**/*.spec.ts'], recordMaxAgeDays: 0 };
 
 function manifest() {
   let m = emptyManifest();
@@ -95,6 +96,23 @@ describe('selectAffected', () => {
     const specA = result.specs.find((s) => s.spec === 'a.spec.ts');
     expect(specA?.reason).toBe('changed-source');
     expect(result.specs.find((s) => s.spec === 'b.spec.ts')?.reason).toBe('shared-file');
+  });
+
+  it('always runs specs whose record is older than recordMaxAgeDays', () => {
+    const now = 1_000_000;
+    let m = emptyManifest();
+    m = mergeSpec(m, 'a.spec.ts', ['src/a.ts'], now - 31 * 86400); // stale
+    m = mergeSpec(m, 'b.spec.ts', ['src/b.ts'], now); // fresh
+    const result = selectAffected(m, ['src/other.ts'], [], { ...config, recordMaxAgeDays: 30 }, now);
+    expect(result.specs).toEqual([{ spec: 'a.spec.ts', triggeredBy: [], reason: 'stale-record' }]);
+  });
+
+  it('recordMaxAgeDays=0 disables staleness', () => {
+    const now = 1_000_000;
+    let m = emptyManifest();
+    m = mergeSpec(m, 'a.spec.ts', ['src/a.ts'], 1);
+    const result = selectAffected(m, ['src/other.ts'], [], { ...config, recordMaxAgeDays: 0 }, now);
+    expect(result.specs).toEqual([]);
   });
 
   it('treats a file exactly at the threshold as shared', () => {

@@ -61,7 +61,7 @@ PW_TIA_COLLECT=1 npx playwright test   # or just run it in CI — CI=true enable
 npx pw-tia collect                     # merge fragments → tia-manifest.json
 ```
 
-Coverage overhead is ~5–15%, so it's opt-in locally (`PW_TIA_COLLECT=1`) and on by default in CI. Commit `tia-manifest.json` to your repo.
+Coverage uses V8's `Profiler.startPreciseCoverage`, which costs ~2–10% of JS execution — on the demo suite the wall-clock difference was within noise, since e2e time is dominated by browser setup and assertions rather than pure JS. It's opt-in locally (`PW_TIA_COLLECT=1`) and on by default in CI. Commit `tia-manifest.json` to your repo.
 
 **4. Select on each PR:**
 
@@ -131,6 +131,7 @@ Optional `playwright-tia.config.json` in your project root:
 | `coverage.serveRoot` | project root | FS dir your dev server's URL root maps to (e.g. `"dist"`) — needed when served files don't sit at the root. |
 | `sharedThreshold` | `0.8` | Files covered by ≥ this fraction of specs are "shared" — reported explicitly instead of silently selecting everything. |
 | `specGlob` | `["**/*.spec.*", "**/*.test.*"]` | Identifies spec files for the new-spec/spec-changed rules. Scope it to your e2e dir to avoid matching unit tests. |
+| `recordMaxAgeDays` | `30` | Manifest records older than this go stale — their spec always runs until a coverage run refreshes them. `0` disables. |
 
 ### Environment variables
 
@@ -149,6 +150,7 @@ Optional `playwright-tia.config.json` in your project root:
 | A spec exists with no manifest record | Runs (`new-spec`) |
 | A spec has a record but zero sources | Runs (`no-sources`, conservative) |
 | A shared file (≥ `sharedThreshold`) changed | Covering specs run, flagged `shared-file` |
+| A spec's record is older than `recordMaxAgeDays` | Runs (`stale-record`) until re-collected |
 | A changed file matches `forceRun` | Everything runs |
 | Manifest missing/empty/corrupt | Everything runs |
 | `git diff` fails (bad ref, not a repo) | Everything runs |
@@ -173,7 +175,7 @@ See [`examples/demo-app`](examples/demo-app) for a working project and [`demo.ym
 - **Collection is Chromium-only** (CDP). The manifest applies to runs on all browsers.
 - **Sourcemaps required.** Your test build must emit them (inline or external `.map`). Scripts without a resolvable map are ignored, leaving the spec conservative — it runs more often, never less.
 - **Discrimination follows code-splitting.** Coverage attributes the chunks a spec loaded, so lazy-loaded routes give sharp attribution; a single flat bundle attributes everything it contains and `sharedThreshold` becomes your main signal.
-- **Iframes and workers.** Coverage spans every page/popup in the spec's browser context, but not OOPIF iframes or service workers — specs relying on them get broader attribution.
+- **Workers.** Coverage spans every page/popup in the spec's context plus cross-origin (OOPIF) iframes, but not web/shared/service workers — specs relying on them get broader attribution.
 - **First run runs everything.** Without a manifest there is nothing to select with — it runs the whole suite and learns.
 
 ## License

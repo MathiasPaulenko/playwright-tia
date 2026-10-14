@@ -210,6 +210,15 @@ async function doctor(cwd: string, config: TiaConfig): Promise<RunResult> {
   if (empty.length > 0) {
     lines.push(`zero sources: ${empty.length} spec(s) always run (no-sources)${list(empty)}`);
   }
+  const staleBefore = config.recordMaxAgeDays > 0
+    ? Math.floor(Date.now() / 1000) - config.recordMaxAgeDays * 86400
+    : 0;
+  const stale = Object.entries(manifest.specs)
+    .filter(([, r]) => staleBefore > 0 && r.updatedAt < staleBefore)
+    .map(([s]) => s);
+  if (stale.length > 0) {
+    lines.push(`stale: ${stale.length} spec(s) not refreshed in ${config.recordMaxAgeDays}d+ always run (stale-record)${list(stale)}`);
+  }
   const coverage = new Map<string, number>();
   for (const record of Object.values(manifest.specs)) {
     for (const src of record.sources) coverage.set(src, (coverage.get(src) ?? 0) + 1);

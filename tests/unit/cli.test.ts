@@ -39,8 +39,8 @@ afterEach(async () => {
 const manifest: TiaManifest = {
   version: 1,
   specs: {
-    'tests/cart.spec.ts': { sources: ['src/cart.ts'], updatedAt: 1 },
-    'tests/profile.spec.ts': { sources: ['src/profile.ts'], updatedAt: 1 },
+    'tests/cart.spec.ts': { sources: ['src/cart.ts'], updatedAt: Math.floor(Date.now() / 1000) },
+    'tests/profile.spec.ts': { sources: ['src/profile.ts'], updatedAt: Math.floor(Date.now() / 1000) },
   },
 };
 
@@ -81,7 +81,7 @@ describe('pw-tia affected', () => {
     await mkdir(sub, { recursive: true });
     const subManifest: TiaManifest = {
       version: 1,
-      specs: { 'tests/cart.spec.ts': { sources: ['src/cart.ts'], updatedAt: 1 } },
+      specs: { 'tests/cart.spec.ts': { sources: ['src/cart.ts'], updatedAt: Math.floor(Date.now() / 1000) } },
     };
     await writeFile(join(sub, 'tia-manifest.json'), JSON.stringify(subManifest));
     await mkdir(join(sub, 'src'), { recursive: true });
@@ -172,7 +172,7 @@ describe('pw-tia collect', () => {
     await mkdir(join(dir, '.tia', 'fragments'), { recursive: true });
     await writeFile(
       join(dir, '.tia', 'fragments', '0.jsonl'),
-      `${JSON.stringify({ spec: 'tests/a.spec.ts', sources: ['src/a.ts'], updatedAt: 5 })}\n`,
+      `${JSON.stringify({ spec: 'tests/a.spec.ts', sources: ['src/a.ts'], updatedAt: Math.floor(Date.now() / 1000) })}\n`,
     );
     const { stderr, code } = await run(['collect'], dir);
     expect(code).toBe(0);
@@ -186,7 +186,7 @@ describe('pw-tia collect', () => {
     await commitFile('scripts/smoke.check.ts', '// spec with odd suffix');
     await writeFile(
       join(dir, 'tia-manifest.json'),
-      JSON.stringify({ version: 1, specs: { 'scripts/smoke.check.ts': { sources: ['src/s.ts'], updatedAt: 1 } } }),
+      JSON.stringify({ version: 1, specs: { 'scripts/smoke.check.ts': { sources: ['src/s.ts'], updatedAt: Math.floor(Date.now() / 1000) } } }),
     );
     const { code } = await run(['collect'], dir);
     expect(code).toBe(0);
