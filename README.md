@@ -72,6 +72,10 @@ npx pw-tia run --base origin/main
 
 ## CLI
 
+### `pw-tia init`
+
+Scaffolds the setup: writes `playwright-tia.config.json` (never overwrites), adds `.tia/` to `.gitignore`, and tells you how many specs already import `playwright-tia` vs `@playwright/test`.
+
 ### `pw-tia affected`
 
 Prints the spec paths to run — one per line on **stdout**, so it composes directly into `playwright test <args>` (Playwright treats positional args as filters). Explanations go to **stderr**.
@@ -122,6 +126,8 @@ specs on disk: 4 (via specGlob)
 shared files (>=0.8):
     src/shell.ts (4 specs)
 ```
+
+`pw-tia doctor --json` emits the same report as JSON — useful to gate CI on coverage health.
 
 ## Configuration
 

@@ -2,7 +2,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { readdir } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -17,10 +17,11 @@ const execFileAsync = promisify(execFile);
 const USAGE = `pw-tia — Test Impact Analysis for Playwright
 
 Usage:
+  pw-tia init
   pw-tia affected [--base <ref> | --files <list>] [--json] [--all]
   pw-tia run [--base <ref> | --files <list>] [--all] [--dry-run] [-- <playwright args>]
   pw-tia collect
-  pw-tia doctor
+  pw-tia doctor [--json]
 
 Commands:
   affected   Print the specs to run for the current diff (stdout = spec paths,
@@ -130,8 +131,12 @@ export async function run(argv: string[], cwd: string = process.cwd(), stdinText
 
   const config = await loadConfig(cwd);
 
+  if (command === 'init') {
+    return init(cwd, config);
+  }
+
   if (command === 'doctor') {
-    return doctor(cwd, config);
+    return doctor(cwd, config, rest.includes('--json'));
   }
 
   if (command === 'collect') {
@@ -291,56 +296,84 @@ async function spawnPlaywright(cwd: string, specArgs: string[], pwArgs: string[]
   });
 }
 
-async function doctor(cwd: string, config: TiaConfig): Promise<RunResult> {
-  const lines: string[] = [];
+interface DoctorReport {
+  config: string;
+  git: boolean;
+  manifest: { records: number };
+  specsOnDisk: number;
+  uncovered: string[];
+  orphaned: string[];
+  zeroSources: string[];
+  stale: string[];
+  shared: { file: string; specCount: number }[];
+}
 
-  const configExists = existsSync(join(cwd, 'playwright-tia.config.json'));
-  lines.push(configExists ? 'config: playwright-tia.config.json' : 'config: defaults (no playwright-tia.config.json)');
-
-  const gitOk = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd })
-    .then(() => true)
-    .catch(() => false);
-  lines.push(gitOk ? 'git: repository ok' : 'git: NOT a repository — affected will always run everything');
+async function doctor(cwd: string, config: TiaConfig, asJson: boolean): Promise<RunResult> {
+  const report: DoctorReport = {
+    config: existsSync(join(cwd, 'playwright-tia.config.json')) ? 'playwright-tia.config.json' : 'defaults',
+    git: await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd })
+      .then(() => true)
+      .catch(() => false),
+    manifest: { records: 0 },
+    specsOnDisk: 0,
+    uncovered: [],
+    orphaned: [],
+    zeroSources: [],
+    stale: [],
+    shared: [],
+  };
 
   const manifest = await loadManifest(join(cwd, config.manifestPath));
   const specCount = Object.keys(manifest.specs).length;
-  lines.push(specCount > 0 ? `manifest: ${specCount} spec record(s)` : 'manifest: missing or empty — first run will execute everything and learn');
+  report.manifest.records = specCount;
 
   const diskSpecs = await walkSpecs(cwd, config.specGlob);
-  lines.push(`specs on disk: ${diskSpecs.length} (via specGlob)`);
-
-  const missing = diskSpecs.filter((s) => !manifest.specs[s]);
-  if (missing.length > 0) {
-    lines.push(`no coverage yet: ${missing.length} spec(s) always run (new-spec)${list(missing)}`);
-  }
-  const orphans = Object.keys(manifest.specs).filter((s) => !existsSync(join(cwd, s)));
-  if (orphans.length > 0) {
-    lines.push(`stale records: ${orphans.length} spec(s) no longer exist — 'collect' prunes them${list(orphans)}`);
-  }
-  const empty = Object.entries(manifest.specs)
+  report.specsOnDisk = diskSpecs.length;
+  report.uncovered = diskSpecs.filter((s) => !manifest.specs[s]);
+  report.orphaned = Object.keys(manifest.specs).filter((s) => !existsSync(join(cwd, s)));
+  report.zeroSources = Object.entries(manifest.specs)
     .filter(([, r]) => r.sources.length === 0)
     .map(([s]) => s);
-  if (empty.length > 0) {
-    lines.push(`zero sources: ${empty.length} spec(s) always run (no-sources)${list(empty)}`);
-  }
   const staleBefore = config.recordMaxAgeDays > 0
     ? Math.floor(Date.now() / 1000) - config.recordMaxAgeDays * 86400
     : 0;
-  const stale = Object.entries(manifest.specs)
+  report.stale = Object.entries(manifest.specs)
     .filter(([, r]) => staleBefore > 0 && r.updatedAt < staleBefore)
     .map(([s]) => s);
-  if (stale.length > 0) {
-    lines.push(`stale: ${stale.length} spec(s) not refreshed in ${config.recordMaxAgeDays}d+ always run (stale-record)${list(stale)}`);
-  }
+
   const coverage = new Map<string, number>();
   for (const record of Object.values(manifest.specs)) {
     for (const src of record.sources) coverage.set(src, (coverage.get(src) ?? 0) + 1);
   }
-  const shared = [...coverage.entries()]
+  report.shared = [...coverage.entries()]
     .filter(([, n]) => specCount > 0 && n / specCount >= config.sharedThreshold)
-    .sort((a, b) => b[1] - a[1]);
-  if (shared.length > 0) {
-    lines.push(`shared files (>=${config.sharedThreshold}):${list(shared.map(([f, n]) => `${f} (${n} specs)`))}`);
+    .sort((a, b) => b[1] - a[1])
+    .map(([file, specCount]) => ({ file, specCount }));
+
+  if (asJson) {
+    return { code: 0, stdout: `${JSON.stringify(report, null, 2)}\n`, stderr: '' };
+  }
+
+  const lines = [
+    `config: ${report.config === 'defaults' ? 'defaults (no playwright-tia.config.json)' : report.config}`,
+    report.git ? 'git: repository ok' : 'git: NOT a repository — affected will always run everything',
+    specCount > 0 ? `manifest: ${specCount} spec record(s)` : 'manifest: missing or empty — first run will execute everything and learn',
+    `specs on disk: ${report.specsOnDisk} (via specGlob)`,
+  ];
+  if (report.uncovered.length > 0) {
+    lines.push(`no coverage yet: ${report.uncovered.length} spec(s) always run (new-spec)${list(report.uncovered)}`);
+  }
+  if (report.orphaned.length > 0) {
+    lines.push(`stale records: ${report.orphaned.length} spec(s) no longer exist — 'collect' prunes them${list(report.orphaned)}`);
+  }
+  if (report.zeroSources.length > 0) {
+    lines.push(`zero sources: ${report.zeroSources.length} spec(s) always run (no-sources)${list(report.zeroSources)}`);
+  }
+  if (report.stale.length > 0) {
+    lines.push(`stale: ${report.stale.length} spec(s) not refreshed in ${config.recordMaxAgeDays}d+ always run (stale-record)${list(report.stale)}`);
+  }
+  if (report.shared.length > 0) {
+    lines.push(`shared files (>=${config.sharedThreshold}):${list(report.shared.map((s) => `${s.file} (${s.specCount} specs)`))}`);
   }
   return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' };
 
@@ -348,6 +381,46 @@ async function doctor(cwd: string, config: TiaConfig): Promise<RunResult> {
     const shown = items.slice(0, 5);
     return `\n    ${shown.join('\n    ')}${items.length > shown.length ? `\n    … +${items.length - shown.length}` : ''}`;
   }
+}
+
+/** Scaffold: write a default config, gitignore .tia/, and report spec readiness. */
+async function init(cwd: string, config: TiaConfig): Promise<RunResult> {
+  const lines: string[] = [];
+  const configPath = join(cwd, 'playwright-tia.config.json');
+  if (existsSync(configPath)) {
+    lines.push('config: playwright-tia.config.json already exists — left untouched');
+  } else {
+    await writeFile(configPath, `${JSON.stringify({ specGlob: config.specGlob }, null, 2)}\n`);
+    lines.push('config: wrote playwright-tia.config.json');
+  }
+
+  const gitignorePath = join(cwd, '.gitignore');
+  const gitignore = await readFile(gitignorePath, 'utf8').catch(() => '');
+  if (!/^\.tia\/?$/m.test(gitignore)) {
+    await writeFile(gitignorePath, `${gitignore}${gitignore.endsWith('\n') || gitignore === '' ? '' : '\n'}.tia/\n`);
+    lines.push('.gitignore: added .tia/ (coverage fragments are intermediate artifacts)');
+  } else {
+    lines.push('.gitignore: .tia/ already ignored');
+  }
+
+  const specs = await walkSpecs(cwd, config.specGlob);
+  let collecting = 0;
+  let playwrightNative = 0;
+  for (const spec of specs) {
+    const src = await readFile(join(cwd, spec), 'utf8').catch(() => '');
+    if (/from\s+['"]playwright-tia['"]/.test(src)) collecting++;
+    else if (/from\s+['"]@playwright\/test['"]/.test(src)) playwrightNative++;
+  }
+  lines.push(`specs: ${specs.length} found — ${collecting} spec(s) already collect coverage`);
+  if (playwrightNative > 0) {
+    lines.push(`       ${playwrightNative} spec(s) still import @playwright/test — change to:`);
+    lines.push(`         import { test, expect } from 'playwright-tia';`);
+  }
+
+  lines.push('');
+  lines.push('next: PW_TIA_COLLECT=1 npx playwright test && npx pw-tia collect');
+  lines.push('then commit tia-manifest.json');
+  return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' };
 }
 
 function emit(result: AffectedResult, asJson: boolean, changedCount: number): RunResult {

@@ -222,6 +222,61 @@ describe('pw-tia doctor', () => {
   });
 });
 
+describe('pw-tia doctor --json', () => {
+  it('emits a machine-readable report', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
+    await commitFile('tests/new.spec.ts', '');
+    const { stdout, code } = await run(['doctor', '--json'], dir);
+    expect(code).toBe(0);
+    const report = JSON.parse(stdout) as {
+      git: boolean;
+      manifest: { records: number };
+      specsOnDisk: number;
+      uncovered: string[];
+      orphaned: string[];
+      shared: { file: string; specCount: number }[];
+    };
+    expect(report.git).toBe(true);
+    expect(report.manifest.records).toBe(2);
+    expect(report.specsOnDisk).toBe(3);
+    expect(report.uncovered).toEqual(['tests/new.spec.ts']);
+    expect(report.orphaned).toEqual([]);
+    expect(report.shared).toEqual([]);
+  });
+});
+
+describe('pw-tia init', () => {
+  it('writes a config file, gitignores .tia and reports next steps', async () => {
+    await commitFile('tests/a.spec.ts', "import { test } from 'playwright-tia';");
+    const { code, stdout } = await run(['init'], dir);
+    expect(code).toBe(0);
+    expect(stdout).toContain('playwright-tia.config.json');
+    const config = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(join(dir, 'playwright-tia.config.json'), 'utf8'))) as { specGlob: string[] };
+    expect(config.specGlob.length).toBeGreaterThan(0);
+    const gitignore = await import('node:fs/promises').then((fs) => fs.readFile(join(dir, '.gitignore'), 'utf8'));
+    expect(gitignore).toContain('.tia/');
+    expect(stdout).toContain('1 spec(s) already collect coverage');
+  });
+
+  it('warns about specs still importing @playwright/test', async () => {
+    await commitFile('tests/a.spec.ts', "import { test } from '@playwright/test';");
+    const { stdout } = await run(['init'], dir);
+    expect(stdout).toContain('1 spec(s) still import @playwright/test');
+    expect(stdout).toContain("from 'playwright-tia'");
+  });
+
+  it('is idempotent — never overwrites an existing config', async () => {
+    await commitFile('playwright-tia.config.json', '{ "sharedThreshold": 0.5 }');
+    const { code, stdout } = await run(['init'], dir);
+    expect(code).toBe(0);
+    expect(stdout).toContain('already exists');
+    const raw = await import('node:fs/promises').then((fs) => fs.readFile(join(dir, 'playwright-tia.config.json'), 'utf8'));
+    expect(raw).toContain('0.5');
+  });
+});
+
 describe('pw-tia usage', () => {
   it('prints usage on --help and unknown commands fail', async () => {
     const help = await run(['--help'], dir);
