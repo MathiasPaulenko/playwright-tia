@@ -1,6 +1,6 @@
 {
   "name": "playwright-tia",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Test Impact Analysis for Playwright: run only the specs affected by changes in your app's source code, using real per-spec V8 coverage.",
   "type": "module",
   "main": "./dist/index.cjs",
