@@ -1,0 +1,58 @@
+name: playwright-tia
+description: >-
+  Run only the Playwright specs affected by the changes in your PR,
+  using per-spec V8 coverage mapping. Requires playwright-tia set up in
+  the project (npm i -D playwright-tia and a tia-manifest.json baseline).
+author: MathiasPaulenko
+branding:
+  icon: zap
+  color: purple
+
+inputs:
+  base:
+    description: Base ref/SHA to diff against
+    required: false
+    default: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+  run:
+    description: >-
+      If "true", runs `playwright test` with the affected specs.
+      If "false", only resolves and outputs the affected spec list.
+    required: false
+    default: "true"
+  args:
+    description: Extra args appended to the pw-tia/playwright commands
+    required: false
+    default: ""
+
+outputs:
+  specs:
+    description: Space-separated list of affected spec files
+    value: ${{ steps.tia.outputs.specs }}
+  count:
+    description: Number of affected specs
+    value: ${{ steps.tia.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve affected specs
+      id: tia
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+      run: |
+        if [ -z "$BASE" ]; then BASE="origin/main"; fi
+        SPECS=$(npx --yes pw-tia affected --base "$BASE" 2>/dev/null || npx --yes playwright-tia affected --base "$BASE")
+        echo "specs=$SPECS" >> "$GITHUB_OUTPUT"
+        echo "count=$(echo $SPECS | wc -w)" >> "$GITHUB_OUTPUT"
+        echo "Affected specs: $SPECS"
+
+    - name: Run affected Playwright specs
+      if: inputs.run == 'true'
+      shell: bash
+      run: |
+        if [ -z "${{ steps.tia.outputs.specs }}" ]; then
+          echo "No affected specs — skipping test run."
+          exit 0
+        fi
+        npx playwright test ${{ steps.tia.outputs.specs }} ${{ inputs.args }}
