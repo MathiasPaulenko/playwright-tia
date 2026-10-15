@@ -1,8 +1,5 @@
 name: playwright-tia
-description: >-
-  Run only the Playwright specs affected by the changes in your PR,
-  using per-spec V8 coverage mapping. Requires playwright-tia set up in
-  the project (npm i -D playwright-tia and a tia-manifest.json baseline).
+description: Run only the Playwright specs affected by your changes, using per-spec V8 coverage.
 author: MathiasPaulenko
 branding:
   icon: zap
