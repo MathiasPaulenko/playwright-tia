@@ -38,12 +38,15 @@ export interface ResolveResult {
 
 const MAP_REF_RE = /\/\/#\s*sourceMappingURL=(\S+)\s*$/m;
 const WIN_ABS = /^[a-zA-Z]:[\\/]/;
+// A dev server that accepts the connection but never responds must not hang
+// the whole coverage record (and with it the test's teardown).
+const FETCH_TIMEOUT_MS = 15_000;
 
 async function defaultFetchText(url: string): Promise<string | undefined> {
   try {
     if (url.startsWith('file://')) return await readFile(fileURLToPath(url), 'utf8');
     if (/^https?:\/\//.test(url)) {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       return res.ok ? await res.text() : undefined;
     }
     return await readFile(url, 'utf8');
@@ -103,34 +106,44 @@ function inIntervals(intervals: [number, number][], offset: number): boolean {
  * `sources` entries are bundler-dependent (relative to the map file, to the
  * build cwd, webpack://, url-absolute…). Normalizing to "the longest suffix
  * that exists under rootDir" is the only resolution that doesn't care.
+ * Anything that can't be mapped to a file inside rootDir returns undefined.
  */
 function toRepoRelative(sourcePath: string, virtualDir: string, rootDir: string): string | undefined {
-  let p = sourcePath;
-  if (p.startsWith('file://')) p = fileURLToPath(p);
-  else if (/^https?:\/\//.test(p)) p = decodeURIComponent(new URL(p).pathname);
-  p = p.replace(/^[a-z-]+:\/\//i, ''); // webpack://, vite://, turbopack://…
+  try {
+    let p = sourcePath;
+    if (p.startsWith('file://')) p = fileURLToPath(p);
+    else if (/^https?:\/\//.test(p)) p = decodeURIComponent(new URL(p).pathname);
+    p = p.replace(/^[a-z-]+:\/\//i, ''); // webpack://, vite://, turbopack://…
+    p = p.split(/[?#]/)[0]!; // bundler cache-busting suffixes (vite ?t=, webpack ?…)
 
-  let candidate: string;
-  if (isAbsolute(p) || WIN_ABS.test(p)) {
-    const rel = relative(rootDir, p);
-    if (!rel.startsWith('..')) candidate = rel;
-    else if (!WIN_ABS.test(p)) candidate = p.replace(/^\/+/, ''); // posix-abs = server path
-    else candidate = '';
-  } else {
-    const rel = relative(rootDir, resolve(virtualDir, p));
-    candidate = rel.startsWith('..') ? p.replace(/^[/\\]+/, '') : rel;
+    let candidate: string;
+    if (isAbsolute(p) || WIN_ABS.test(p)) {
+      const rel = relative(rootDir, p);
+      if (!rel.startsWith('..')) candidate = rel;
+      else if (!WIN_ABS.test(p)) candidate = p.replace(/^\/+/, ''); // posix-abs = server path
+      else candidate = '';
+    } else {
+      const rel = relative(rootDir, resolve(virtualDir, p));
+      candidate = rel.startsWith('..') ? p.replace(/^[/\\]+/, '') : rel;
+    }
+
+    candidate = candidate.split(/[\\/]/).join('/');
+    if (!candidate || candidate.split('/').includes('..') || WIN_ABS.test(candidate) || candidate.startsWith('/')) {
+      return undefined;
+    }
+    if (existsSync(join(rootDir, candidate))) return candidate;
+
+    const segments = candidate.split('/');
+    for (let i = 1; i < segments.length; i++) {
+      const tail = segments.slice(i).join('/');
+      if (existsSync(join(rootDir, tail))) return tail;
+    }
+    return undefined;
+  } catch {
+    // Malformed scheme/path combinations must drop the single mapping, not
+    // abort the whole script's resolution.
+    return undefined;
   }
-
-  candidate = candidate.split(/[\\/]/).join('/');
-  if (!candidate) return undefined;
-  if (existsSync(join(rootDir, candidate))) return candidate;
-
-  const segments = candidate.split('/');
-  for (let i = 1; i < segments.length; i++) {
-    const tail = segments.slice(i).join('/');
-    if (existsSync(join(rootDir, tail))) return tail;
-  }
-  return undefined;
 }
 
 /**
@@ -148,7 +161,7 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
     .map((g) => picomatch(g.slice(1)));
 
   const sources = new Set<string>();
-  const unresolved: string[] = [];
+  const unresolved = new Set<string>();
   // Each bundle maps thousands of segments to the same few sources — cache.
   const normalized = new Map<string, string | undefined>();
 
@@ -157,21 +170,28 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
 
     const source = entry.source ?? (await fetchText(entry.url));
     if (source === undefined) {
-      unresolved.push(entry.url);
+      unresolved.add(entry.url);
       return;
     }
 
     const mapRef = MAP_REF_RE.exec(source)?.[1];
     let rawMap: string | undefined;
-    if (mapRef?.startsWith('data:')) {
-      rawMap = Buffer.from(mapRef.slice(mapRef.indexOf(',') + 1), 'base64').toString('utf8');
-    } else if (mapRef) {
-      rawMap = await fetchText(new URL(mapRef, entry.url).href);
+    try {
+      if (mapRef?.startsWith('data:')) {
+        rawMap = Buffer.from(mapRef.slice(mapRef.indexOf(',') + 1), 'base64').toString('utf8');
+      } else if (mapRef) {
+        // Script urls reported by CDP are not always parseable as URLs
+        // (webpack-internal:, extensions::, …) — a bad ref must only drop
+        // this script, never the whole spec's record.
+        rawMap = await fetchText(new URL(mapRef, entry.url).href);
+      }
+    } catch {
+      rawMap = undefined;
     }
     if (!rawMap) {
       // A script with no sourcemap resolves only to the bundle itself —
       // useless for source selection, so it counts as unresolved.
-      unresolved.push(entry.url);
+      unresolved.add(entry.url);
       return;
     }
 
@@ -197,10 +217,10 @@ export async function resolveSources(entries: CoverageEntry[], options: ResolveO
         sources.add(rel);
       });
     } catch {
-      unresolved.push(entry.url);
+      unresolved.add(entry.url);
     }
   };
 
   await Promise.all(entries.map(resolveEntry));
-  return { sources: [...sources].sort(), unresolved };
+  return { sources: [...sources].sort(), unresolved: [...unresolved] };
 }

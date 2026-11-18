@@ -143,4 +143,49 @@ describe('resolveSources', () => {
     expect(sources).toContain('src/alpha.ts');
     expect(sources).toContain('src/beta.ts');
   });
+
+  it('does not crash on a script url that is not parseable', async () => {
+    const source = 'var x = 1;\n//# sourceMappingURL=relative.map\n';
+    const { sources, unresolved } = await resolveSources(
+      [{ url: 'webpack-internal://app', source, functions: covered(source) }],
+      { rootDir: appDir, fetchText: async () => undefined },
+    );
+    expect(sources).toEqual([]);
+    expect(unresolved).toEqual(['webpack-internal://app']);
+  });
+
+  it('resolves sources carrying bundler query suffixes', async () => {
+    // Hand-built map whose sources carry vite-style cache-busting queries.
+    const map = {
+      version: 3,
+      sources: ['src/alpha.ts?v=123', 'src/beta.ts#frag'],
+      names: [],
+      mappings: 'AAAA;ACAA',
+    };
+    const source = 'var alpha = 1;\nvar beta = 2;\n//# sourceMappingURL=data:application/json;base64,' +
+      Buffer.from(JSON.stringify(map)).toString('base64');
+    const { sources, unresolved } = await resolveSources(
+      [{ url: 'http://localhost:5173/app.js', source, functions: covered(source) }],
+      { rootDir: appDir },
+    );
+    expect(unresolved).toEqual([]);
+    expect(sources).toContain('src/alpha.ts');
+    expect(sources).toContain('src/beta.ts');
+  });
+
+  it('never emits sources outside the project root', async () => {
+    const map = {
+      version: 3,
+      sources: ['../outside.ts', 'src/alpha.ts'],
+      names: [],
+      mappings: 'AAAA;ACAA',
+    };
+    const source = 'var alpha = 1;\nvar beta = 2;\n//# sourceMappingURL=data:application/json;base64,' +
+      Buffer.from(JSON.stringify(map)).toString('base64');
+    const { sources } = await resolveSources(
+      [{ url: 'http://localhost:5173/app.js', source, functions: covered(source) }],
+      { rootDir: appDir },
+    );
+    expect(sources).toEqual(['src/alpha.ts']);
+  });
 });
