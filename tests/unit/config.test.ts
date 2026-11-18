@@ -45,4 +45,43 @@ describe('loadConfig', () => {
     await writeFile(join(dir, 'playwright-tia.config.json'), '{oops');
     expect(await loadConfig(dir)).toEqual(defaultConfig);
   });
+
+  it('falls back to defaults when the file is not an object', async () => {
+    await writeFile(join(dir, 'playwright-tia.config.json'), '"just a string"');
+    expect(await loadConfig(dir)).toEqual(defaultConfig);
+  });
+
+  it('keeps defaults for fields with wrong types instead of crashing', async () => {
+    await writeFile(
+      join(dir, 'playwright-tia.config.json'),
+      JSON.stringify({
+        specGlob: 'e2e/**/*.spec.ts', // string instead of array
+        forceRun: 42,
+        sharedThreshold: '0.5',
+        recordMaxAgeDays: -3,
+        manifestPath: '../outside.json',
+        baseRef: 7,
+        coverage: { enabled: 'yes', filter: 'src/**', serveRoot: '/abs' },
+      }),
+    );
+    expect(await loadConfig(dir)).toEqual(defaultConfig);
+  });
+
+  it('rejects out-of-range sharedThreshold', async () => {
+    await writeFile(join(dir, 'playwright-tia.config.json'), JSON.stringify({ sharedThreshold: 0 }));
+    expect((await loadConfig(dir)).sharedThreshold).toBe(defaultConfig.sharedThreshold);
+    await writeFile(join(dir, 'playwright-tia.config.json'), JSON.stringify({ sharedThreshold: 1.5 }));
+    expect((await loadConfig(dir)).sharedThreshold).toBe(defaultConfig.sharedThreshold);
+  });
+
+  it('accepts valid partial fields and clamps recordMaxAgeDays', async () => {
+    await writeFile(
+      join(dir, 'playwright-tia.config.json'),
+      JSON.stringify({ specGlob: ['e2e/**'], recordMaxAgeDays: 7.9, sharedThreshold: 0.5 }),
+    );
+    const config = await loadConfig(dir);
+    expect(config.specGlob).toEqual(['e2e/**']);
+    expect(config.recordMaxAgeDays).toBe(7);
+    expect(config.sharedThreshold).toBe(0.5);
+  });
 });
