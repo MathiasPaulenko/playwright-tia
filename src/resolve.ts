@@ -128,14 +128,24 @@ function toRepoRelative(sourcePath: string, virtualDir: string, rootDir: string)
     }
 
     candidate = candidate.split(/[\\/]/).join('/');
-    if (!candidate || candidate.split('/').includes('..') || WIN_ABS.test(candidate) || candidate.startsWith('/')) {
-      return undefined;
+    if (!candidate) return undefined;
+    // The direct candidate must stay inside rootDir — but a `..`-prefixed
+    // candidate (sourcemaps relative to a tmp outdir on the same filesystem)
+    // still goes through the suffix fallback below, which is what recovers
+    // the real repo path. Only returned values are guaranteed in-root.
+    if (
+      !candidate.split('/').includes('..') &&
+      !WIN_ABS.test(candidate) &&
+      !candidate.startsWith('/') &&
+      existsSync(join(rootDir, candidate))
+    ) {
+      return candidate;
     }
-    if (existsSync(join(rootDir, candidate))) return candidate;
 
     const segments = candidate.split('/');
     for (let i = 1; i < segments.length; i++) {
       const tail = segments.slice(i).join('/');
+      if (!tail || tail.split('/').includes('..')) continue;
       if (existsSync(join(rootDir, tail))) return tail;
     }
     return undefined;

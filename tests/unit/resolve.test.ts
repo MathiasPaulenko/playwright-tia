@@ -188,4 +188,24 @@ describe('resolveSources', () => {
     );
     expect(sources).toEqual(['src/alpha.ts']);
   });
+
+  it('recovers repo paths from ..-relative sources via the suffix fallback', async () => {
+    // CI layout: the bundle lives in a tmp dir on the same filesystem as the
+    // repo, so esbuild emits sources relative to it — resolving them against
+    // rootDir lands outside, and only the longest-existing suffix recovers
+    // the real path.
+    const map = {
+      version: 3,
+      sources: ['../../home/runner/work/playwright-tia/tests/fixtures/app/src/alpha.ts'],
+      names: [],
+      mappings: 'AAAA',
+    };
+    const source = 'var alpha = 1;\n//# sourceMappingURL=data:application/json;base64,' +
+      Buffer.from(JSON.stringify(map)).toString('base64');
+    const { sources } = await resolveSources(
+      [{ url: 'http://localhost:5173/app.js', source, functions: covered(source) }],
+      { rootDir: appDir },
+    );
+    expect(sources).toEqual(['src/alpha.ts']);
+  });
 });

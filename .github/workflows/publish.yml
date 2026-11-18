@@ -25,7 +25,14 @@ jobs:
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+        run: |
+          # Idempotent: re-running the workflow for a tag whose release
+          # already exists must not fail before reaching npm publish.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          fi
       # Trusted publishing requires npm CLI >= 11.5.1; Node 22 ships npm 10.x.
       - run: npm install -g npm@latest
       - run: npm ci
