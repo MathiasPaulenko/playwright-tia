@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export interface SpecRecord {
@@ -30,7 +30,7 @@ export async function loadManifest(path: string): Promise<TiaManifest> {
       return emptyManifest();
     }
     for (const [spec, record] of Object.entries(parsed.specs)) {
-      if (!record || !Array.isArray(record.sources)) {
+      if (!record || !Array.isArray(record.sources) || !isSafeSpecKey(normalizeRepoPath(spec))) {
         delete parsed.specs[spec];
         continue;
       }
@@ -49,12 +49,44 @@ export async function saveManifest(path: string, manifest: TiaManifest): Promise
     version: 1,
     specs: Object.fromEntries(Object.entries(manifest.specs).sort(([a], [b]) => a.localeCompare(b))),
   };
-  await writeFile(path, `${JSON.stringify(sorted, null, 2)}\n`, 'utf8');
+  const content = `${JSON.stringify(sorted, null, 2)}\n`;
+  // Atomic write: a killed collect must not leave a truncated manifest
+  // behind (a corrupt manifest degrades every later selection to run-all).
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    await writeFile(tmp, content, 'utf8');
+    try {
+      await rename(tmp, path);
+    } catch {
+      // Windows rename() does not replace an existing target — remove and retry.
+      await rm(path, { force: true });
+      await rename(tmp, path);
+    }
+  } catch {
+    await rm(tmp, { force: true });
+    await writeFile(path, content, 'utf8');
+  }
 }
 
 /** Repo paths stay POSIX-style regardless of the platform Playwright ran on. */
 export function normalizeRepoPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/**
+ * Spec/source keys must be repo-relative and stay inside the project: a
+ * fragment line or manifest entry with `..` segments, an absolute path or the
+ * `__proto__` key (assignment would mutate the object's prototype instead of
+ * adding a record) is dropped rather than stored.
+ */
+export function isSafeSpecKey(key: string): boolean {
+  return (
+    key.length > 0 &&
+    key !== '__proto__' &&
+    !key.startsWith('/') &&
+    !/^[a-zA-Z]:\//.test(key) &&
+    !key.split('/').includes('..')
+  );
 }
 
 /** Re-runs replace (not union) sources: the record mirrors the latest run. */
@@ -64,10 +96,13 @@ export function mergeSpec(
   sources: string[],
   now: number = Math.floor(Date.now() / 1000),
 ): TiaManifest {
-  manifest.specs[normalizeRepoPath(specPath)] = {
-    sources: [...new Set(sources)].sort(),
-    updatedAt: now,
-  };
+  const key = normalizeRepoPath(specPath);
+  if (isSafeSpecKey(key)) {
+    manifest.specs[key] = {
+      sources: [...new Set(sources)].sort(),
+      updatedAt: now,
+    };
+  }
   return manifest;
 }
 
@@ -91,8 +126,10 @@ export async function appendSpecFragment(
   sources: string[],
   now: number = Math.floor(Date.now() / 1000),
 ): Promise<void> {
+  const key = normalizeRepoPath(specPath);
+  if (!isSafeSpecKey(key)) return;
   await mkdir(fragmentsDir, { recursive: true });
-  const line = `${JSON.stringify({ spec: normalizeRepoPath(specPath), sources: [...new Set(sources)].sort(), updatedAt: now })}\n`;
+  const line = `${JSON.stringify({ spec: key, sources: [...new Set(sources)].sort(), updatedAt: now })}\n`;
   await appendFile(join(fragmentsDir, `${workerId}.jsonl`), line, 'utf8');
 }
 
@@ -105,7 +142,8 @@ export async function readFragments(fragmentsDir: string): Promise<Map<string, S
   const records = new Map<string, SpecRecord>();
   let files: string[];
   try {
-    files = (await readdir(fragmentsDir)).filter((f) => f.endsWith('.jsonl'));
+    const entries = await readdir(fragmentsDir, { withFileTypes: true });
+    files = entries.filter((e) => e.isFile() && e.name.endsWith('.jsonl')).map((e) => e.name);
   } catch {
     return records;
   }
@@ -117,10 +155,14 @@ export async function readFragments(fragmentsDir: string): Promise<Map<string, S
         const { spec, sources, updatedAt } = JSON.parse(line) as SpecRecord & { spec: string };
         if (typeof spec !== 'string' || !Array.isArray(sources)) continue;
         const key = normalizeRepoPath(spec);
+        if (!isSafeSpecKey(key)) continue;
+        // A fragment with a non-numeric timestamp must not poison the record
+        // with NaN — 0 marks it stale, which keeps the spec running.
+        const stamp = typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : 0;
         const prev = records.get(key);
         records.set(key, {
           sources: [...new Set([...(prev?.sources ?? []), ...sources])].sort(),
-          updatedAt: Math.max(prev?.updatedAt ?? 0, updatedAt),
+          updatedAt: Math.max(prev?.updatedAt ?? 0, stamp),
         });
       } catch {
         // A torn write (killed worker) must not break the whole merge.
