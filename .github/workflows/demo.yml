@@ -25,7 +25,12 @@ jobs:
       # peer @playwright/test resolves to the app's own copy (as on npm)
       - run: npm install --install-links
         working-directory: examples/demo-app
+      # Install the browser for the demo-app's own @playwright/test — the
+      # version that actually runs here. Installing from the root couples the
+      # browser build to the root's playwright version and breaks whenever
+      # the two diverge (in either direction).
       - run: npx playwright install --with-deps chromium
+        working-directory: examples/demo-app
 
       # Baseline: a full run with coverage enabled learns the manifest.
       - run: PW_TIA_COLLECT=1 npx playwright test
