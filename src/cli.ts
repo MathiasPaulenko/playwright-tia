@@ -2,8 +2,8 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import picomatch from 'picomatch';
@@ -13,6 +13,17 @@ import { loadManifest, mergeFragments, normalizeRepoPath, saveManifest } from '.
 import { selectAffected, type AffectedResult } from './selector.js';
 
 const execFileAsync = promisify(execFile);
+// Large diffs (bulk renames, lockfile churn) exceed the 1 MiB default.
+const GIT_OPTIONS = { maxBuffer: 64 * 1024 * 1024 };
+
+/** Symlinked install dirs (macOS /var → /private/var, pnpm stores) break path math. */
+function tryRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
 
 const USAGE = `pw-tia — Test Impact Analysis for Playwright
 
@@ -53,20 +64,30 @@ export interface RunResult {
  * only files under the project — outside changes can't be covered anyway.
  */
 async function gitChangedFiles(rootDir: string, base: string): Promise<string[]> {
+  // A ref never starts with '-' — anything that does would be parsed as a git
+  // option (e.g. --base "--output=/tmp/x" writes the diff to an arbitrary file).
+  if (!base || base.startsWith('-')) {
+    throw new Error(`invalid base ref '${base}'`);
+  }
   const { stdout: topLevel } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], {
     cwd: rootDir,
+    ...GIT_OPTIONS,
   });
-  const gitRoot = topLevel.trim();
-  const prefix = normalizeRepoPath(relative(gitRoot, rootDir));
-  const diff = async (args: string[]) => (await execFileAsync('git', args, { cwd: gitRoot })).stdout;
+  const gitRoot = tryRealpath(topLevel.trim());
+  const rootReal = tryRealpath(resolve(rootDir));
+  const prefix = normalizeRepoPath(relative(gitRoot, rootReal));
+  // -z emits raw NUL-separated paths: no C-quoting, so non-ASCII and special
+  // filenames survive verbatim and keep matching manifest keys.
+  const diff = async (args: string[]) =>
+    (await execFileAsync('git', ['-c', 'core.quotepath=false', ...args], { cwd: gitRoot, ...GIT_OPTIONS })).stdout;
   const files = new Set<string>();
   const outputs = await Promise.all([
-    diff(['diff', '--name-only', `${base}...HEAD`]),
-    diff(['diff', '--name-only']), // unstaged
-    diff(['diff', '--cached', '--name-only']), // staged
+    diff(['diff', '--name-only', '-z', `${base}...HEAD`]),
+    diff(['diff', '--name-only', '-z']), // unstaged
+    diff(['diff', '--cached', '--name-only', '-z']), // staged
   ]);
   for (const out of outputs) {
-    for (const line of out.split('\n')) {
+    for (const line of out.split('\0')) {
       const file = normalizeRepoPath(line.trim());
       if (!file) continue;
       if (prefix && file !== prefix && !file.startsWith(`${prefix}/`)) continue;
@@ -146,8 +167,16 @@ export async function run(argv: string[], cwd: string = process.cwd(), stdinText
     // files must not wipe their records.
     const existing = Object.keys(loaded.specs).filter((spec) => existsSync(join(cwd, spec)));
     const currentSpecs = [...new Set([...(await walkSpecs(cwd, config.specGlob)), ...existing])];
-    const manifest = await mergeFragments(join(cwd, '.tia', 'fragments'), loaded, currentSpecs);
+    const fragmentsDir = join(cwd, '.tia', 'fragments');
+    const manifest = await mergeFragments(fragmentsDir, loaded, currentSpecs);
     await saveManifest(manifestPath, manifest);
+    // Fragments are intermediate artifacts: leaving them on disk makes the
+    // next collect union stale coverage from earlier runs into fresh records.
+    for (const entry of await readdir(fragmentsDir, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        await rm(join(fragmentsDir, entry.name), { force: true });
+      }
+    }
     return { code: 0, stdout: '', stderr: `pw-tia: manifest written (${Object.keys(manifest.specs).length} spec(s))` };
   }
 
@@ -212,21 +241,22 @@ export async function run(argv: string[], cwd: string = process.cwd(), stdinText
   }
 
   if (command === 'affected') {
-    return emit(result, asJson, changedCount);
+    return emit(filterExisting(result, cwd), asJson, changedCount);
   }
 
   // 'run'
-  if (!result.runAll && result.specs.length === 0) {
+  const runnable = filterExisting(result, cwd);
+  if (!runnable.runAll && runnable.specs.length === 0) {
     return { code: 0, stdout: '', stderr: 'pw-tia: nothing affected — no specs to run' };
   }
   // runAll passes no spec args: playwright's own testMatch applies, which is
   // more faithful than feeding it our glob-discovered list.
-  const specArgs = result.runAll ? [] : result.specs.map((s) => s.spec);
+  const specArgs = runnable.runAll ? [] : runnable.specs.map((s) => toPlaywrightFilter(s.spec));
   const cmd = `playwright test${[...specArgs, ...pwArgs].map((a) => ` ${a}`).join('')}`;
   if (dryRun) {
-    return { code: 0, stdout: `${cmd}\n`, stderr: explain(result, changedCount) };
+    return { code: 0, stdout: `${cmd}\n`, stderr: explain(runnable, changedCount) };
   }
-  process.stderr.write(`${explain(result, changedCount)}\n`);
+  process.stderr.write(`${explain(runnable, changedCount)}\n`);
   try {
     return { code: await spawnPlaywright(cwd, specArgs, pwArgs), stdout: '', stderr: '' };
   } catch (error) {
@@ -234,26 +264,61 @@ export async function run(argv: string[], cwd: string = process.cwd(), stdinText
   }
 }
 
-/** Accepts repo-relative or rootDir-relative paths; strips the monorepo prefix. */
+/**
+ * Manifest records for specs that no longer exist on disk must not reach the
+ * output: `playwright test deleted.spec.ts` fails with "no tests found" when
+ * it is the only selection, and it is noise in the spec list otherwise.
+ */
+function filterExisting(result: AffectedResult, cwd: string): AffectedResult {
+  return { ...result, specs: result.specs.filter((s) => existsSync(join(cwd, s.spec))) };
+}
+
+/**
+ * Playwright treats positional args as regular expressions, so a spec named
+ * `checkout(a).spec.ts` would be a broken filter and `a+b.spec.ts` would never
+ * match. Paths without regex metacharacters stay verbatim.
+ */
+function toPlaywrightFilter(spec: string): string {
+  if (!/[*+?^${}()|[\]\\]/.test(spec)) return spec;
+  return spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Accepts repo-relative, rootDir-relative or absolute paths; strips the
+ * monorepo prefix. Paths outside rootDir are dropped — they can never match
+ * a manifest key.
+ */
 async function relativize(rootDir: string, files: string[]): Promise<string[]> {
   let prefix = '';
+  let rootReal = resolve(rootDir);
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: rootDir });
-    prefix = normalizeRepoPath(relative(stdout.trim(), resolve(rootDir)));
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: rootDir,
+      ...GIT_OPTIONS,
+    });
+    rootReal = tryRealpath(resolve(rootDir));
+    prefix = normalizeRepoPath(relative(tryRealpath(stdout.trim()), rootReal));
   } catch {
     // not a git repo — paths are already relative to rootDir
   }
   return files
     .map((f) => {
-      const file = normalizeRepoPath(f.trim());
+      // Absolute inputs (common from CI systems) become rootDir-relative.
+      const rel = normalizeRepoPath(relative(rootReal, resolve(rootReal, f.trim())));
+      const file = rel.startsWith('..') || isAbsolute(rel) ? normalizeRepoPath(f.trim()) : rel;
       return prefix && file.startsWith(`${prefix}/`) ? file.slice(prefix.length + 1) : file;
     })
-    .filter(Boolean)
+    .filter((f) => f && !f.startsWith('..') && !isAbsolute(f) && !/^[a-zA-Z]:\//.test(f))
     .sort();
 }
 
 function parseFileList(raw: string): string[] {
-  return raw.split(/[\s,]+/).filter(Boolean);
+  // Comma/newline separated (as documented) — splitting on every whitespace
+  // would break filenames that contain spaces.
+  return raw
+    .split(/[\r\n,]+/)
+    .map((f) => f.trim())
+    .filter(Boolean);
 }
 
 function readStdin(): Promise<string> {
@@ -291,7 +356,8 @@ async function spawnPlaywright(cwd: string, specArgs: string[], pwArgs: string[]
   }
   return await new Promise((resolvePromise, reject) => {
     spawn(process.execPath, [cliPath, 'test', ...specArgs, ...pwArgs], { cwd, stdio: 'inherit' })
-      .on('exit', (code) => resolvePromise(code ?? 1))
+      // 'close' waits for stdio to drain; 'exit' can fire before output is flushed.
+      .on('close', (code) => resolvePromise(code ?? 1))
       .on('error', reject);
   });
 }
@@ -447,9 +513,14 @@ const isMain = (() => {
   }
 })();
 if (isMain) {
-  void run(process.argv.slice(2)).then(({ code, stdout, stderr }) => {
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(`${stderr}\n`);
-    process.exitCode = code;
-  });
+  void run(process.argv.slice(2))
+    .then(({ code, stdout, stderr }) => {
+      if (stdout) process.stdout.write(stdout);
+      if (stderr) process.stderr.write(`${stderr}\n`);
+      process.exitCode = code;
+    })
+    .catch((error: unknown) => {
+      process.stderr.write(`pw-tia: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
 }

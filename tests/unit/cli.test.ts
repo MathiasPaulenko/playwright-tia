@@ -57,6 +57,40 @@ describe('pw-tia affected', () => {
     expect(stdout.trim().split('\n').sort()).toEqual(['tests/cart.spec.ts']);
   });
 
+  it('matches changed files with non-ascii and space names', async () => {
+    // git C-quotes such paths in --name-only output; they must still match.
+    const unicodeManifest: TiaManifest = {
+      version: 1,
+      specs: {
+        'tests/uni.spec.ts': { sources: ['src/café.ts', 'src/my file.ts'], updatedAt: Math.floor(Date.now() / 1000) },
+      },
+    };
+    await commitFile('tia-manifest.json', JSON.stringify(unicodeManifest));
+    await commitFile('src/café.ts', 'x');
+    await commitFile('src/my file.ts', 'x');
+    await commitFile('tests/uni.spec.ts', '// test');
+    await commitFile('src/café.ts', 'y', 'change café');
+    await commitFile('src/my file.ts', 'y', 'change spaced');
+
+    const { stdout, code } = await run(['affected', '--base', 'HEAD~5'], dir);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('tests/uni.spec.ts');
+  });
+
+  it('drops manifest records for specs that no longer exist on disk', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '// test');
+    await commitFile('src/cart.ts', 'x');
+    await commitFile('src/cart.ts', 'y', 'change cart');
+    // tests/profile.spec.ts only lives in the manifest — deleted on disk.
+    await commitFile('src/profile.ts', 'x');
+    await commitFile('src/profile.ts', 'y', 'change profile');
+
+    const { stdout, code } = await run(['affected', '--base', 'HEAD~4'], dir);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('tests/cart.spec.ts');
+  });
+
   it('prints run-all and explains when no manifest exists', async () => {
     await commitFile('tests/only.spec.ts', '// test');
     const { stdout, stderr, code } = await run(['affected', '--base', 'HEAD'], dir);
@@ -67,6 +101,8 @@ describe('pw-tia affected', () => {
 
   it('emits json with reasons', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
     await commitFile('src/cart.ts', 'x');
     await commitFile('src/cart.ts', 'y', 'change');
     const { stdout } = await run(['affected', '--base', 'HEAD~1', '--json'], dir);
@@ -85,7 +121,9 @@ describe('pw-tia affected', () => {
     };
     await writeFile(join(sub, 'tia-manifest.json'), JSON.stringify(subManifest));
     await mkdir(join(sub, 'src'), { recursive: true });
+    await mkdir(join(sub, 'tests'), { recursive: true });
     await writeFile(join(sub, 'src', 'cart.ts'), 'x');
+    await writeFile(join(sub, 'tests', 'cart.spec.ts'), '// test');
     await writeFile(join(dir, 'other.ts'), 'x');
     await gitRun('add', '-A');
     await gitRun('commit', '-qm', 'base');
@@ -97,9 +135,33 @@ describe('pw-tia affected', () => {
     expect(stdout.trim()).toBe('tests/cart.spec.ts');
   });
 
+  it('relativizes absolute paths passed via --files', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
+    const { stdout, code } = await run(['affected', '--files', join(dir, 'src', 'cart.ts')], dir);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('tests/cart.spec.ts');
+  });
+
+  it('keeps filenames with spaces intact in --files', async () => {
+    const spacedManifest: TiaManifest = {
+      version: 1,
+      specs: {
+        'tests/spaced.spec.ts': { sources: ['src/my file.ts'], updatedAt: Math.floor(Date.now() / 1000) },
+      },
+    };
+    await commitFile('tia-manifest.json', JSON.stringify(spacedManifest));
+    await commitFile('tests/spaced.spec.ts', '');
+    const { stdout, code } = await run(['affected', '--files', 'src/my file.ts'], dir);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('tests/spaced.spec.ts');
+  });
+
   it('detects unstaged worktree changes', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
     await commitFile('src/cart.ts', 'x');
+    await commitFile('tests/cart.spec.ts', '');
     await writeFile(join(dir, 'src', 'cart.ts'), 'y'); // modified, not committed
     const { stdout } = await run(['affected', '--base', 'HEAD'], dir);
     expect(stdout).toContain('tests/cart.spec.ts');
@@ -108,6 +170,8 @@ describe('pw-tia affected', () => {
   it('runs everything when the base ref does not exist', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
     await commitFile('src/cart.ts', 'x');
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
     const { stdout, stderr, code } = await run(['affected', '--base', 'no-such-ref'], dir);
     expect(code).toBe(0);
     expect(stderr).toContain('git error');
@@ -115,9 +179,22 @@ describe('pw-tia affected', () => {
     expect(stdout).toContain('tests/profile.spec.ts');
   });
 
+  it('degrades to run-all when the base ref looks like a git option', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('src/cart.ts', 'x');
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
+    const { stdout, stderr, code } = await run(['affected', '--base=-output-file'], dir);
+    expect(code).toBe(0);
+    expect(stderr).toContain('git error');
+    expect(stdout).toContain('tests/cart.spec.ts');
+  });
+
   it('lists every spec with --all', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
     await commitFile('src/cart.ts', 'x');
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
     const { stdout, stderr } = await run(['affected', '--all'], dir);
     expect(stderr).toContain('run all');
     expect(stdout).toContain('tests/cart.spec.ts');
@@ -127,6 +204,8 @@ describe('pw-tia affected', () => {
   it('accepts --base=<ref> syntax', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
     await commitFile('src/cart.ts', 'x');
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
     await commitFile('src/cart.ts', 'y', 'change');
     const { stdout } = await run(['affected', '--base=HEAD~1'], dir);
     expect(stdout.trim()).toBe('tests/cart.spec.ts');
@@ -146,12 +225,15 @@ describe('pw-tia affected --files', () => {
 
   it('accepts comma- and newline-separated lists', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
+    await commitFile('tests/profile.spec.ts', '');
     const { stdout } = await run(['affected', '--files', 'src/cart.ts,src/profile.ts'], dir);
     expect(stdout.trim().split('\n').sort()).toEqual(['tests/cart.spec.ts', 'tests/profile.spec.ts']);
   });
 
   it('reads the list from stdin with --files -', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/profile.spec.ts', '');
     const { stdout } = await run(['affected', '--files', '-'], dir, 'src/profile.ts\n');
     expect(stdout.trim()).toBe('tests/profile.spec.ts');
   });
@@ -161,7 +243,9 @@ describe('pw-tia affected --files', () => {
     try {
       await writeFile(join(plain, 'tia-manifest.json'), JSON.stringify(manifest));
       await mkdir(join(plain, 'src'), { recursive: true });
+      await mkdir(join(plain, 'tests'), { recursive: true });
       await writeFile(join(plain, 'src', 'cart.ts'), 'x');
+      await writeFile(join(plain, 'tests', 'cart.spec.ts'), '');
       const { stdout, code } = await run(['affected', '--files', 'src/cart.ts'], plain);
       expect(code).toBe(0);
       expect(stdout.trim()).toBe('tests/cart.spec.ts');
@@ -196,8 +280,35 @@ describe('pw-tia run', () => {
 
   it('forwards args after -- to playwright', async () => {
     await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('tests/cart.spec.ts', '');
     const { stdout } = await run(['run', '--files', 'src/cart.ts', '--dry-run', '--', '--grep', 'smoke'], dir);
     expect(stdout.trim()).toBe('playwright test tests/cart.spec.ts --grep smoke');
+  });
+
+  it('escapes regex metacharacters in spec filters', async () => {
+    const metaManifest: TiaManifest = {
+      version: 1,
+      specs: {
+        'tests/a+b.spec.ts': { sources: ['src/x.ts'], updatedAt: Math.floor(Date.now() / 1000) },
+      },
+    };
+    await commitFile('tia-manifest.json', JSON.stringify(metaManifest));
+    await mkdir(join(dir, 'tests'), { recursive: true });
+    await writeFile(join(dir, 'tests', 'a+b.spec.ts'), '// test');
+    const { stdout, code } = await run(['run', '--files', 'src/x.ts', '--dry-run'], dir);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('playwright test tests/a\\+b\\.spec\\.ts');
+  });
+
+  it('exits 0 when the only affected spec was deleted', async () => {
+    await commitFile('tia-manifest.json', JSON.stringify(manifest));
+    await commitFile('src/cart.ts', 'x');
+    await commitFile('src/cart.ts', 'y', 'change cart');
+    // tests/cart.spec.ts exists only in the manifest — deleted on disk.
+    const { stdout, stderr, code } = await run(['run', '--base', 'HEAD~1', '--dry-run'], dir);
+    expect(code).toBe(0);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('nothing affected');
   });
 });
 
@@ -315,5 +426,32 @@ describe('pw-tia collect', () => {
     expect(code).toBe(0);
     const written = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(join(dir, 'tia-manifest.json'), 'utf8'))) as TiaManifest;
     expect(written.specs['scripts/smoke.check.ts']).toBeDefined();
+  });
+
+  it('removes fragments after merging so stale coverage does not leak into later collects', async () => {
+    await commitFile('tests/a.spec.ts', '// test');
+    const fragments = join(dir, '.tia', 'fragments');
+    await mkdir(fragments, { recursive: true });
+    const write = (name: string, sources: string[]): Promise<void> =>
+      writeFile(
+        join(fragments, name),
+        `${JSON.stringify({ spec: 'tests/a.spec.ts', sources, updatedAt: Math.floor(Date.now() / 1000) })}\n`,
+      );
+
+    await write('0.jsonl', ['src/old.ts']);
+    const first = await run(['collect'], dir);
+    expect(first.code).toBe(0);
+    const afterFirst = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(join(dir, 'tia-manifest.json'), 'utf8'))) as TiaManifest;
+    expect(afterFirst.specs['tests/a.spec.ts']!.sources).toEqual(['src/old.ts']);
+
+    // The spec no longer executes src/old.ts — the new run must replace, not
+    // union with, the fragment left behind by the previous collect.
+    await write('1.jsonl', ['src/new.ts']);
+    const second = await run(['collect'], dir);
+    expect(second.code).toBe(0);
+    const afterSecond = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(join(dir, 'tia-manifest.json'), 'utf8'))) as TiaManifest;
+    expect(afterSecond.specs['tests/a.spec.ts']!.sources).toEqual(['src/new.ts']);
+    const leftover = await import('node:fs/promises').then((fs) => fs.readdir(fragments));
+    expect(leftover.filter((f) => f.endsWith('.jsonl'))).toEqual([]);
   });
 });
