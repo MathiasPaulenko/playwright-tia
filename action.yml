@@ -39,7 +39,13 @@ runs:
         BASE: ${{ inputs.base }}
       run: |
         if [ -z "$BASE" ]; then BASE="origin/main"; fi
-        SPECS=$(npx --yes pw-tia affected --base "$BASE" 2>/dev/null || npx --yes playwright-tia affected --base "$BASE")
+        # npx resolves the package by name — 'pw-tia' is only the bin inside
+        # playwright-tia, and npx pw-tia would fetch an unrelated (or squatted)
+        # package from the registry.
+        SPECS=$(npx --yes playwright-tia affected --base "$BASE" 2>/dev/null || true)
+        # GitHub Actions outputs are single-line: fold the spec list into one
+        # space-separated line or every spec after the first is lost.
+        SPECS=$(echo "$SPECS" | tr '\n' ' ')
         echo "specs=$SPECS" >> "$GITHUB_OUTPUT"
         echo "count=$(echo $SPECS | wc -w)" >> "$GITHUB_OUTPUT"
         echo "Affected specs: $SPECS"
