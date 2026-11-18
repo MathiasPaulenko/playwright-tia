@@ -2,7 +2,7 @@ import { join, relative } from 'node:path';
 import { test as base, type CDPSession, type Frame, type Page, type TestInfo } from '@playwright/test';
 
 import { loadConfig, type TiaConfig } from './config.js';
-import { appendSpecFragment, normalizeRepoPath } from './manifest.js';
+import { appendSpecFragment, isSafeSpecKey, normalizeRepoPath } from './manifest.js';
 import { resolveSources, type CoverageEntry } from './resolve.js';
 
 let cachedConfig: TiaConfig | undefined;
@@ -15,7 +15,7 @@ export function collectEnabled(
   env: { PW_TIA_COLLECT?: string; CI?: string },
   configEnabled: boolean,
 ): boolean {
-  const flag = env.PW_TIA_COLLECT;
+  const flag = env.PW_TIA_COLLECT?.toLowerCase();
   if (flag === '0' || flag === 'false') return false;
   if (flag === '1' || flag === 'true' || env.CI) return true;
   return configEnabled;
@@ -58,6 +58,17 @@ async function record(sessions: Set<CDPSession>, testInfo: TestInfo, rootDir: st
       // Page closed mid-test or session died — its coverage is lost, not fatal.
     }
   }
+  const specPath = normalizeRepoPath(relative(rootDir, testInfo.file));
+  if (!isSafeSpecKey(specPath)) {
+    console.warn(`pw-tia: spec ${testInfo.file} resolves outside the project root — coverage not recorded`);
+    return;
+  }
+  if (entries.length === 0) {
+    // Every CDP session died (page closed mid-test): recording an empty
+    // source list would overwrite a good record with 'no-sources'.
+    console.warn('pw-tia: no coverage captured — previous record for this spec is kept');
+    return;
+  }
   const config = await tiaConfig(rootDir);
   const { sources, unresolved } = await resolveSources(entries, {
     rootDir,
@@ -70,7 +81,6 @@ async function record(sessions: Set<CDPSession>, testInfo: TestInfo, rootDir: st
         `(${unresolved.slice(0, 3).join(', ')}${unresolved.length > 3 ? ', …' : ''}) — this spec keeps conservative sources`,
     );
   }
-  const specPath = normalizeRepoPath(relative(rootDir, testInfo.file));
   await appendSpecFragment(join(rootDir, '.tia', 'fragments'), testInfo.parallelIndex, specPath, sources);
 }
 

@@ -16,6 +16,12 @@ describe('collectEnabled', () => {
     expect(collectEnabled({ PW_TIA_COLLECT: 'true' }, false)).toBe(true);
   });
 
+  it('matches PW_TIA_COLLECT case-insensitively', () => {
+    expect(collectEnabled({ PW_TIA_COLLECT: 'TRUE' }, false)).toBe(true);
+    expect(collectEnabled({ PW_TIA_COLLECT: 'FALSE', CI: 'true' }, false)).toBe(false);
+    expect(collectEnabled({ PW_TIA_COLLECT: 'False', CI: 'true' }, false)).toBe(false);
+  });
+
   it('PW_TIA_COLLECT=0 beats CI', () => {
     expect(collectEnabled({ PW_TIA_COLLECT: '0', CI: 'true' }, false)).toBe(false);
     expect(collectEnabled({ PW_TIA_COLLECT: 'false', CI: 'true' }, false)).toBe(false);
