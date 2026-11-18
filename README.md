@@ -88,7 +88,7 @@ npx pw-tia affected --files src/cart.ts         # explicit file list, no git nee
 git diff --name-only main | npx pw-tia affected --files -   # or pipe it via stdin
 ```
 
-`--files` decouples selection from git — pass the changed-files list from Nx, Turborepo, your CI system, or a non-git VCS.
+`--files` decouples selection from git — pass the changed-files list from Nx, Turborepo, your CI system, or a non-git VCS. Entries are comma/newline separated; filenames with spaces are fine, and absolute paths are relativized against the project root.
 
 Example stderr:
 
@@ -108,11 +108,11 @@ npx pw-tia run --base origin/main -- --grep smoke  # forward playwright args
 npx pw-tia run --dry-run                           # print the command, don't run
 ```
 
-When nothing is affected it exits 0 without invoking Playwright; when selection degrades to run-all it invokes `playwright test` with no filters (Playwright's own `testMatch` applies).
+When nothing is affected it exits 0 without invoking Playwright; when selection degrades to run-all it invokes `playwright test` with no filters (Playwright's own `testMatch` applies). Specs whose files no longer exist on disk are dropped from the selection, and spec paths containing regex metacharacters are escaped before being passed to Playwright (it treats positional args as regexes).
 
 ### `pw-tia collect`
 
-Merges `.tia/fragments/*.jsonl` into `tia-manifest.json` and prunes records for specs that no longer exist. Run it after every coverage-enabled suite.
+Merges `.tia/fragments/*.jsonl` into `tia-manifest.json` and prunes records for specs that no longer exist. Run it after every coverage-enabled suite — it clears the fragments it merged, so the next run starts from a clean slate instead of unioning stale coverage into fresh records.
 
 ### `pw-tia doctor`
 
@@ -177,6 +177,7 @@ Optional `playwright-tia.config.json` in your project root:
 | A changed file matches `forceRun` | Everything runs |
 | Manifest missing/empty/corrupt | Everything runs |
 | `git diff` fails (bad ref, not a repo) | Everything runs |
+| A manifest spec no longer exists on disk | Dropped from the output (`collect` prunes it) |
 
 Unmatched changes (docs, README) select nothing. Monorepos work: run `pw-tia` from the project subdirectory — paths are re-relativized against the git root.
 
